@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Universal Document & PDF Studio Pro</title>
+  <meta name="description" content="サーバー送信不要・完全ブラウザ完結で安全な万能ドキュメント＆PDF変換・編集スイート。PDF結合・分割・削除・画像変換、Office/PDF相互変換、電子印鑑・署名・黒塗り、OCR文字認識、差分比較、完全オフラインパック出力に対応。">
+  <meta property="og:title" content="Universal Document & PDF Studio Pro">
+  <meta property="og:description" content="サーバー送信不要・完全ブラウザ完結で安全な万能ドキュメント＆PDF変換・編集スイート。PDF結合・分割・削除・画像変換、Office/PDF相互変換、電子印鑑・署名・黒塗り、OCR文字認識、差分比較、完全オフラインパック出力に対応。">
+
+  <!-- Google Web Fonts for Japanese Hanko and Document Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Kaisei+Decol:wght@500;700&family=Noto+Sans+JP:wght@400;500;600;700;800&family=Noto+Serif+JP:wght@500;700;900&display=swap" rel="stylesheet">
+
+  <style>
+    /* Custom scrollbar and utilities */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in {
+      animation: fadeIn 0.18s ease-out forwards;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 antialiased min-h-screen">
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

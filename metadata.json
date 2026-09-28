@@ -1,0 +1,6 @@
+{
+  "name": "Universal Document & PDF Studio Pro",
+  "description": "サーバー送信不要・完全ブラウザ完結で安全な万能ドキュメント＆PDF変換・編集スイート。PDF結合・分割・削除・画像変換、Office/PDF相互変換、電子印鑑・署名・黒塗り、OCR文字認識、差分比較、完全オフラインパック出力に対応。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
