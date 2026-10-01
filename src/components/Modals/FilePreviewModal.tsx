@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Download, FileText, ZoomIn, ZoomOut, RotateCw, Copy, Check, Eye, Code, ExternalLink } from 'lucide-react';
+import { X, Download, FileText, ZoomIn, ZoomOut, RotateCw, Copy, Check, Eye, Code, ExternalLink, BookOpen } from 'lucide-react';
 import { FileItem } from '../../types';
 import { docxToHtml } from '../../utils/officeUtils';
 import { parseSpreadsheet } from '../../utils/officeUtils';
 import { inspectZip, ZipEntryInfo } from '../../utils/zipUtils';
 import { extractPdfText } from '../../utils/pdfUtils';
+import { parseMarkdownToHtml } from '../../utils/markdownUtils';
 
 interface FilePreviewModalProps {
   item: FileItem | null;
@@ -21,7 +22,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
   const [activeSheet, setActiveSheet] = useState<string>('');
   const [zipEntries, setZipEntries] = useState<ZipEntryInfo[]>([]);
   const [copied, setCopied] = useState(false);
-  const [htmlBlobUrl, setHtmlBlobUrl] = useState<string>('');
+  const [mediaBlobUrl, setMediaBlobUrl] = useState<string>('');
 
   useEffect(() => {
     if (!item) return;
@@ -32,31 +33,48 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
     setTextContent('');
     setSpreadsheetData({});
     setZipEntries([]);
-    if (htmlBlobUrl) {
-      URL.revokeObjectURL(htmlBlobUrl);
-      setHtmlBlobUrl('');
+    if (mediaBlobUrl) {
+      URL.revokeObjectURL(mediaBlobUrl);
+      setMediaBlobUrl('');
     }
 
     const loadPreview = async () => {
       try {
         const ext = item.name.split('.').pop()?.toLowerCase() || '';
+        const targetBlob: Blob | undefined = item.file || item.resultBlob;
+
+        if (!targetBlob) {
+          if (isMounted) {
+            setTextContent(lang === 'ja' ? 'プレビュー対象のデータがありません。' : 'No preview data available.');
+          }
+          return;
+        }
+
+        // Create blob url for media / sandbox
+        const url = URL.createObjectURL(targetBlob);
+        if (isMounted) setMediaBlobUrl(url);
 
         if (ext === 'html' || ext === 'htm') {
-          const text = await item.file.text();
+          const text = await targetBlob.text();
           if (isMounted) {
             setHtmlContent(text);
             setTextContent(text);
-            const blob = new Blob([text], { type: 'text/html;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            setHtmlBlobUrl(url);
+          }
+        } else if (ext === 'md' || ext === 'markdown') {
+          const text = await targetBlob.text();
+          if (isMounted) {
+            setTextContent(text);
+            setHtmlContent(parseMarkdownToHtml(text));
           }
         } else if (ext === 'docx') {
-          const html = await docxToHtml(item.file);
+          const fileObj = targetBlob instanceof File ? targetBlob : new File([targetBlob], item.name);
+          const html = await docxToHtml(fileObj);
           if (isMounted) {
             setHtmlContent(html);
           }
         } else if (['xlsx', 'xls', 'csv', 'tsv'].includes(ext)) {
-          const data = await parseSpreadsheet(item.file);
+          const fileObj = targetBlob instanceof File ? targetBlob : new File([targetBlob], item.name);
+          const data = await parseSpreadsheet(fileObj);
           if (isMounted) {
             setSpreadsheetData(data.sheets);
             if (data.sheetNames.length > 0) {
@@ -64,15 +82,17 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
             }
           }
         } else if (ext === 'pdf') {
-          const text = await extractPdfText(item.file);
+          const fileObj = targetBlob instanceof File ? targetBlob : new File([targetBlob], item.name);
+          const text = await extractPdfText(fileObj);
           if (isMounted) setTextContent(text);
-        } else if (['txt', 'md', 'json', 'xml', 'rtf', 'js', 'ts', 'css', 'py', 'sh', 'sql'].includes(ext)) {
-          const text = await item.file.text();
+        } else if (['txt', 'json', 'xml', 'rtf', 'js', 'ts', 'css', 'py', 'sh', 'sql'].includes(ext)) {
+          const text = await targetBlob.text();
           if (isMounted) {
             setTextContent(text);
           }
         } else if (ext === 'zip') {
-          const entries = await inspectZip(item.file);
+          const fileObj = targetBlob instanceof File ? targetBlob : new File([targetBlob], item.name);
+          const entries = await inspectZip(fileObj);
           if (isMounted) setZipEntries(entries);
         }
       } catch (err) {
@@ -95,11 +115,11 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
   // Clean up blob url on unmount
   useEffect(() => {
     return () => {
-      if (htmlBlobUrl) {
-        URL.revokeObjectURL(htmlBlobUrl);
+      if (mediaBlobUrl) {
+        URL.revokeObjectURL(mediaBlobUrl);
       }
     };
-  }, [htmlBlobUrl]);
+  }, [mediaBlobUrl]);
 
   if (!item) return null;
 
@@ -108,7 +128,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
   const isAudio = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac'].includes(ext);
   const isVideo = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'flv', 'wmv'].includes(ext);
   const isPdf = ext === 'pdf';
-  const isHtml = ext === 'html' || ext === 'htm';
+  const isHtmlOrMd = ext === 'html' || ext === 'htm' || ext === 'md' || ext === 'markdown';
 
   const handleCopy = () => {
     const textToCopy = textContent || htmlContent;
@@ -121,6 +141,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
 
   const handleDownloadDirect = () => {
     const blob = item.resultBlob || item.file;
+    if (!blob) return;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -151,8 +172,8 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
           </div>
 
           <div className="flex items-center gap-2">
-            {/* HTML View Mode Switcher */}
-            {isHtml && (
+            {/* HTML/Markdown View Mode Switcher */}
+            {isHtmlOrMd && (
               <div className="flex items-center bg-slate-200 dark:bg-slate-800 rounded-lg p-0.5 text-xs font-semibold">
                 <button
                   onClick={() => setHtmlViewMode('rendered')}
@@ -163,7 +184,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
                   }`}
                 >
                   <Eye className="w-3.5 h-3.5" />
-                  <span>{lang === 'ja' ? 'ウェブ表示' : 'Page View'}</span>
+                  <span>{lang === 'ja' ? 'レンダリング' : 'Rendered'}</span>
                 </button>
                 <button
                   onClick={() => setHtmlViewMode('source')}
@@ -217,7 +238,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
           ) : isImage ? (
             <div className="flex items-center justify-center h-full">
               <img
-                src={item.previewUrl || URL.createObjectURL(item.file)}
+                src={item.previewUrl || mediaBlobUrl}
                 alt={item.name}
                 className="max-h-full max-w-full object-contain rounded-lg shadow-md"
               />
@@ -227,24 +248,28 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
               <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-md flex flex-col items-center gap-4 max-w-md w-full">
                 <FileText className="w-12 h-12 text-blue-500" />
                 <p className="text-sm font-bold text-slate-700 dark:text-slate-200">{item.name}</p>
-                <audio
-                  controls
-                  autoPlay
-                  src={URL.createObjectURL(item.file)}
-                  className="w-full"
-                />
+                {mediaBlobUrl && (
+                  <audio
+                    controls
+                    autoPlay
+                    src={mediaBlobUrl}
+                    className="w-full"
+                  />
+                )}
               </div>
             </div>
           ) : isVideo ? (
             <div className="flex items-center justify-center h-full">
-              <video
-                controls
-                autoPlay
-                src={URL.createObjectURL(item.file)}
-                className="max-h-full max-w-full rounded-lg shadow-md bg-black"
-              />
+              {mediaBlobUrl && (
+                <video
+                  controls
+                  autoPlay
+                  src={mediaBlobUrl}
+                  className="max-h-full max-w-full rounded-lg shadow-md bg-black"
+                />
+              )}
             </div>
-          ) : isHtml ? (
+          ) : isHtmlOrMd ? (
             htmlViewMode === 'rendered' ? (
               <div className="flex-1 w-full h-full min-h-[400px] flex flex-col bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xs">
                 <div className="px-3 py-2 bg-slate-100 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs text-slate-500">
@@ -252,11 +277,13 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
                     <span className="w-2.5 h-2.5 rounded-full bg-red-400 inline-block"></span>
                     <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block"></span>
                     <span className="w-2.5 h-2.5 rounded-full bg-green-400 inline-block"></span>
-                    <span className="ml-2 font-semibold text-slate-600 dark:text-slate-300 truncate">HTML Sandbox Preview ({item.name})</span>
+                    <span className="ml-2 font-semibold text-slate-600 dark:text-slate-300 truncate">
+                      {ext === 'md' || ext === 'markdown' ? 'Markdown Rendered' : 'HTML Sandbox'} ({item.name})
+                    </span>
                   </div>
-                  {htmlBlobUrl && (
+                  {mediaBlobUrl && (
                     <a
-                      href={htmlBlobUrl}
+                      href={mediaBlobUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 font-semibold"
@@ -267,7 +294,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
                   )}
                 </div>
                 <iframe
-                  title="HTML Preview Sandbox"
+                  title="Document Preview Sandbox"
                   srcDoc={htmlContent}
                   sandbox="allow-same-origin allow-scripts"
                   className="w-full flex-1 border-0 bg-white"
@@ -275,7 +302,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
               </div>
             ) : (
               <pre className="p-4 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-mono whitespace-pre-wrap overflow-auto flex-1 text-slate-800 dark:text-slate-200">
-                {htmlContent}
+                {textContent || htmlContent}
               </pre>
             )
           ) : isPdf ? (
@@ -298,73 +325,61 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
             <div className="flex flex-col h-full gap-3">
               {/* Sheet tabs */}
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                {Object.keys(spreadsheetData).map((sName) => (
+                {Object.keys(spreadsheetData).map((sheetName) => (
                   <button
-                    key={sName}
-                    onClick={() => setActiveSheet(sName)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                      activeSheet === sName
+                    key={sheetName}
+                    onClick={() => setActiveSheet(sheetName)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                      activeSheet === sheetName
                         ? 'bg-emerald-600 text-white shadow-xs'
-                        : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50'
+                        : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-800'
                     }`}
                   >
-                    {sName}
+                    {sheetName}
                   </button>
                 ))}
               </div>
 
-              {/* Table */}
-              <div className="flex-1 overflow-auto bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-                <table className="w-full border-collapse text-xs text-left">
-                  <tbody>
-                    {(spreadsheetData[activeSheet] || []).map((row, rIdx) => (
-                      <tr
-                        key={rIdx}
-                        className={
-                          rIdx === 0
-                            ? 'bg-slate-100 dark:bg-slate-800/80 font-bold sticky top-0 border-b border-slate-200 dark:border-slate-700'
-                            : 'border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/30'
-                        }
-                      >
-                        <td className="px-3 py-2 text-slate-400 font-mono text-[10px] w-8 border-r border-slate-200 dark:border-slate-800 select-none">
-                          {rIdx + 1}
-                        </td>
-                        {row.map((cell: any, cIdx: number) => (
-                          <td
-                            key={cIdx}
-                            className="px-3 py-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300 truncate max-w-xs"
-                          >
-                            {cell !== undefined && cell !== null ? String(cell) : ''}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              {/* Table rendering */}
+              <div className="flex-1 overflow-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs">
+                {spreadsheetData[activeSheet] && spreadsheetData[activeSheet].length > 0 ? (
+                  <table className="w-full text-xs text-left border-collapse">
+                    <tbody>
+                      {spreadsheetData[activeSheet].slice(0, 100).map((row, rIdx) => (
+                        <tr key={rIdx} className={rIdx === 0 ? 'bg-slate-100 dark:bg-slate-800/60 font-bold' : 'border-b border-slate-100 dark:border-slate-800/40'}>
+                          {row.map((cell, cIdx) => (
+                            <td key={cIdx} className="p-2.5 border-r border-slate-100 dark:border-slate-800/40 max-w-[200px] truncate">
+                              {cell !== null && cell !== undefined ? String(cell) : ''}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="p-8 text-center text-xs text-slate-400">
+                    {lang === 'ja' ? 'シートにデータがありません' : 'No data in sheet'}
+                  </div>
+                )}
               </div>
             </div>
           ) : zipEntries.length > 0 ? (
-            <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4">
+            <div className="flex-1 overflow-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs p-4">
               <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
-                {lang === 'ja' ? 'ZIPアーカイブ内ファイル一覧' : 'ZIP Archive Contents'} ({zipEntries.length} items)
+                {lang === 'ja' ? `ZIPアーカイブ内ファイル一覧 (${zipEntries.length}件)` : `ZIP Contents (${zipEntries.length} items)`}
               </h4>
-              <div className="flex-1 overflow-auto divide-y divide-slate-100 dark:divide-slate-800 text-xs">
-                {zipEntries.map((entry, idx) => (
-                  <div key={idx} className="py-2.5 flex items-center justify-between">
-                    <div className="flex items-center gap-2 truncate">
-                      <FileText className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                      <span className="font-mono text-slate-800 dark:text-slate-200 truncate">{entry.name}</span>
-                    </div>
-                    <div className="flex items-center gap-4 text-slate-400 text-[11px] flex-shrink-0">
-                      <span>{(entry.size / 1024).toFixed(1)} KB</span>
-                    </div>
+              <div className="flex flex-col gap-1.5">
+                {zipEntries.map((e, idx) => (
+                  <div key={idx} className="flex items-center justify-between text-xs py-1.5 px-3 rounded-lg bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800/60">
+                    <span className="font-mono text-slate-700 dark:text-slate-300 truncate">{e.name}</span>
+                    <span className="text-slate-400 shrink-0">{(e.size / 1024).toFixed(1)} KB</span>
                   </div>
                 ))}
               </div>
             </div>
           ) : (
-            <pre className="p-4 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-mono whitespace-pre-wrap text-slate-800 dark:text-slate-200">
-              {textContent || (lang === 'ja' ? 'プレビュー表示可能なコンテンツがありません。' : 'No previewable content.')}
+            <pre className="p-4 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 text-xs sm:text-sm font-mono whitespace-pre-wrap overflow-auto flex-1 text-slate-800 dark:text-slate-200">
+              {textContent || (lang === 'ja' ? 'プレビューを表示できません。' : 'No preview available.')}
             </pre>
           )}
         </div>
