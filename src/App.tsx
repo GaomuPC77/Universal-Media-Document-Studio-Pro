@@ -10,6 +10,7 @@ import { SignAndStamp } from './components/Tabs/SignAndStamp';
 import { OcrSuite } from './components/Tabs/OcrSuite';
 import { DiffSuite } from './components/Tabs/DiffSuite';
 import { ZipSuite } from './components/Tabs/ZipSuite';
+import { HistoryTab } from './components/Tabs/HistoryTab';
 import { FilePreviewModal } from './components/Modals/FilePreviewModal';
 import { DrivePickerModal } from './components/Modals/DrivePickerModal';
 import { HistoryModal } from './components/Modals/HistoryModal';
@@ -283,8 +284,6 @@ export default function App() {
           setTheme={setTheme}
           lang={lang}
           setLang={handleSetLang}
-          onOpenDrivePicker={() => setIsDriveModalOpen(true)}
-          onOpenHistory={() => setIsHistoryModalOpen(true)}
           onDownloadOfflinePack={handleDownloadOfflinePack}
           onOpenTutorial={() => setIsTutorialOpen(true)}
           onShareApp={handleShare}
@@ -333,6 +332,31 @@ export default function App() {
           {activeTab === 'diff-suite' && <DiffSuite lang={lang} sharedFile={activeSharedFile} />}
 
           {activeTab === 'zip-suite' && <ZipSuite lang={lang} />}
+
+          {activeTab === 'history' && (
+            <HistoryTab
+              lang={lang}
+              onPreview={(name, blob, format) => {
+                setPreviewItem({
+                  id: `prev_${Date.now()}`,
+                  name,
+                  size: blob.size,
+                  type: blob.type,
+                  format: format as any,
+                  targetFormat: format as any,
+                  status: 'done',
+                  progress: 100,
+                  resultBlob: blob,
+                  resultName: name,
+                });
+              }}
+              onLoadToActiveStudio={(file) => {
+                handleFilesAdded([file]);
+                setActiveTab('converter');
+              }}
+              onShowToast={showToast}
+            />
+          )}
         </main>
 
         {/* Bottom Features, Environment, How-To, and FAQ Section conforming to Reference HTML */}
@@ -543,16 +567,16 @@ export default function App() {
                 <div className="terms-split-box">
                   <h5>{lang === 'ja' ? '利用規約' : 'Terms of Service'}</h5>
                   <div style={{ fontSize: '0.78rem', lineHeight: '1.5' }}>
-                    <p><strong>第1条（適用）</strong><br />本規約は、Universal Media &amp; Document Studio Pro（以下「本ツール」）の利用に関する条件を定めるものです。</p>
-                    <p style={{ marginTop: '6px' }}><strong>第2条（著作権の遵守）</strong><br />利用者は自らが正当な権利を有するファイルのみを変換対象とするものとします。</p>
-                    <p style={{ marginTop: '6px' }}><strong>第3条（免責事項）</strong><br />本ツールはブラウザ内ローカル処理で実行され、データの破損等について運営者は責任を負いません。</p>
+                    <p><strong>{lang === 'ja' ? '第1条（適用）' : 'Art 1: Scope'}</strong><br />{lang === 'ja' ? '本ツールが提供するすべてのファイル変換・編集機能の利用条件を定めます。' : 'Applies to all conversion and editing services provided by this tool.'}</p>
+                    <p style={{ marginTop: '6px' }}><strong>{lang === 'ja' ? '第2条（著作権の遵守）' : 'Art 2: Copyright'}</strong><br />{lang === 'ja' ? '自らが適法な権利・許諾を有するファイルのみを処理対象としてください。' : 'Only process files you own or are legally authorized to convert.'}</p>
+                    <p style={{ marginTop: '6px' }}><strong>{lang === 'ja' ? '第3条（免責事項）' : 'Art 3: Disclaimer'}</strong><br />{lang === 'ja' ? '完全ローカル処理で動作し、データ破損等の責任は負いません（事前バックアップ推奨）。' : 'Runs 100% client-side; developers assume no liability for data loss.'}</p>
                   </div>
                 </div>
                 <div className="terms-split-box">
                   <h5>{lang === 'ja' ? 'プライバシーポリシー' : 'Privacy Policy'}</h5>
                   <div style={{ fontSize: '0.78rem', lineHeight: '1.5' }}>
-                    <p><strong>1. 完全端末内（ローカル）処理</strong><br />すべての変換処理はお使いのブラウザ内（WASM）で実行され、外部サーバーにファイルが送信されることは一切ありません。</p>
-                    <p style={{ marginTop: '6px' }}><strong>2. Google Drive連携</strong><br />Google純正のOAuth 2.0認証（Google Identity Services）を用いてお客様のマイドライブと直接通信します。認証トークンやファイルデータが外部サーバーに送信されることはありません。</p>
+                    <p><strong>{lang === 'ja' ? '1. 完全端末内処理（サーバー非送信）' : '1. 100% Local Browser Execution'}</strong><br />{lang === 'ja' ? 'WASMによりブラウザ内でのみ処理され、ファイルが外部サーバーに送信されることは一切ありません。' : 'Files are processed strictly in your browser via WASM with zero server uploads.'}</p>
+                    <p style={{ marginTop: '6px' }}><strong>{lang === 'ja' ? '2. Google Drive直接通信' : '2. Google Drive Direct HTTPS'}</strong><br />{lang === 'ja' ? '公式OAuth 2.0を用いてユーザーの端末とGoogle間で直接通信します。' : 'Direct encrypted communication between browser and Google Drive.'}</p>
                   </div>
                 </div>
               </div>
@@ -614,10 +638,10 @@ export default function App() {
             <div className="modal-body">
               <ol style={{ paddingLeft: '18px', lineHeight: 1.7 }}>
                 <li><strong>{lang === 'ja' ? '1. ファイルの読み込み:' : '1. Add Files:'}</strong> {lang === 'ja' ? '最上部の「1. 処理するファイルの読み込み・追加」から「ファイルを選択」「フォルダを選択」または「Google Driveから読込」でメディアやドキュメントを追加します。' : 'Add files via Section 1 above (File select, folder select, or Google Drive import).'}</li>
-                <li><strong>{lang === 'ja' ? '2. 処理タブの選択:' : '2. Select Tool:'}</strong> {lang === 'ja' ? '左右矢印ボタンでタブをスクロールし、「一括変換」「PDF編集」「Office変換」「電子印鑑」「OCR」など目的のツールを選択します。' : 'Choose your desired tool from the tab bar (Convert, PDF Toolkit, Office Suite, OCR, etc.).'}</li>
+                <li><strong>{lang === 'ja' ? '2. 処理タブの選択:' : '2. Select Tool:'}</strong> {lang === 'ja' ? '左右スクロールボタン付きのタブバーから「変換」「PDF編集」「Office変換」「電子印鑑」「OCR」「差分比較」「ZIP」「履歴」など目的のツールを選択します。' : 'Choose your desired tool from the scrollable tab bar (Convert, PDF Toolkit, Office Suite, OCR, Diff Studio, ZIP, History, etc.).'}</li>
                 <li><strong>{lang === 'ja' ? '3. 変換とリアルタイム進捗:' : '3. Convert:'}</strong> {lang === 'ja' ? '出力形式を設定して開始ボタンを押すと、リアルタイムに進捗パーセントが表示されます。' : 'Select target format and start conversion to view live progress.'}</li>
                 <li><strong>{lang === 'ja' ? '4. 保存とGoogle Drive同期:' : '4. Save & Drive:'}</strong> {lang === 'ja' ? '完了後、個別保存、Google Driveへ直接同期、または「一括ZIPダウンロード」が可能です。' : 'Download individually, save to Google Drive, or batch download as a ZIP package.'}</li>
-                <li><strong>{lang === 'ja' ? '5. 処理履歴:' : '5. History:'}</strong> {lang === 'ja' ? '過去に処理した成果物はヘッダーの「履歴」ボタンからいつでも再閲覧・再保存できます。' : 'Access previous processed files anytime via the top "History" button.'}</li>
+                <li><strong>{lang === 'ja' ? '5. 処理履歴の確認:' : '5. History:'}</strong> {lang === 'ja' ? '過去に変換・作成したファイルは、タブバー右端の「履歴」タブからいつでも再閲覧・再ダウンロード・再編集できます。' : 'Access previous processed files anytime via the rightmost "History" tab in the navigation bar.'}</li>
               </ol>
             </div>
             <div className="modal-footer">
@@ -630,7 +654,7 @@ export default function App() {
       {/* Terms of Service Modal */}
       {isTermsOpen && (
         <div className="modal-overlay" style={{ display: 'flex' }} onClick={(e) => { if (e.target === e.currentTarget) setIsTermsOpen(false); }}>
-          <div className="modal-box">
+          <div className="modal-box" style={{ maxWidth: '640px' }}>
             <div className="modal-header">
               <div className="modal-title">{lang === 'ja' ? '利用規約' : 'Terms of Service'}</div>
               <button className="modal-close" onClick={() => setIsTermsOpen(false)} aria-label="閉じる">
@@ -641,10 +665,47 @@ export default function App() {
               </button>
             </div>
             <div className="modal-body">
-              <div style={{ lineHeight: '1.6', fontSize: '0.8rem' }}>
-                <p><strong>第1条（適用）</strong><br />本規約は、Universal Media &amp; Document Studio Pro（以下「本ツール」）の利用に関する条件を定めるものです。</p>
-                <p style={{ marginTop: '6px' }}><strong>第2条（著作権・権利の遵守）</strong><br />利用者は、著作権法およびその他の知的財産権関連法令を遵守し、自らが権利を有するファイル、または正当な許諾を得たファイルのみを本ツールの変換対象とするものとします。</p>
-                <p style={{ marginTop: '6px' }}><strong>第3条（免責事項）</strong><br />本ツールの利用により生じたデータの破損、消失、端末の不具合について、開発者および運営者は一切の法的責任を負いません。</p>
+              <div style={{ lineHeight: '1.6', fontSize: '0.82rem' }} className="flex flex-col gap-3">
+                <div>
+                  <p><strong>{lang === 'ja' ? '第1条（適用）' : 'Article 1 (Scope of Application)'}</strong></p>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    {lang === 'ja'
+                      ? '本利用規約（以下「本規約」）は、Universal Media & Document Studio Pro（以下「本ツール」）が提供するすべてのファイル変換、ドキュメント編集、メディア処理、および関連機能の利用条件を定めるものです。利用者は、本ツールを利用することにより本規約に同意したものとみなされます。'
+                      : 'These Terms of Service govern the use of Universal Media & Document Studio Pro (the "Tool") and all associated conversion, editing, and media processing features. By accessing or using the Tool, you agree to be bound by these Terms.'}
+                  </p>
+                </div>
+                <div>
+                  <p><strong>{lang === 'ja' ? '第2条（完全ローカル処理と著作権等の遵守）' : 'Article 2 (Local Processing & Intellectual Property)'}</strong></p>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    {lang === 'ja'
+                      ? '本ツールはWebAssembly技術を活用し、利用者の端末ブラウザ内（クライアントサイド）でのみ処理を実行します。利用者は、著作権法および知的財産権関連法令を遵守し、自らが正当な権利を有するファイル、または権利者から適法な許諾を得たファイルのみを処理対象とするものとします。'
+                      : 'The Tool operates 100% client-side within your browser using WebAssembly. Users must comply with applicable copyright and intellectual property laws and only process files they own or are legally authorized to convert.'}
+                  </p>
+                </div>
+                <div>
+                  <p><strong>{lang === 'ja' ? '第3条（禁止事項）' : 'Article 3 (Prohibited Conduct)'}</strong></p>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    {lang === 'ja'
+                      ? '利用者は、法令または公序良俗に反する行為、第三者の著作権・プライバシー権・肖像権を侵害する行為、不正なマルウェア等の生成や加工、および本ツールの正常な運営を妨げる行為を行ってはならないものとします。'
+                      : 'Users shall not engage in unlawful acts, violate public order, infringe third-party intellectual property or privacy rights, generate malware, or interfere with the normal operation of the Tool.'}
+                  </p>
+                </div>
+                <div>
+                  <p><strong>{lang === 'ja' ? '第4条（免責事項）' : 'Article 4 (Disclaimer of Warranties & Liability)'}</strong></p>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    {lang === 'ja'
+                      ? '本ツールは現状有姿（AS-IS）で提供されます。開発者および運営者は、本ツールの利用または利用不能により生じたデータの破損、消失、端末の不具合、業務の中断等について、一切の損害賠償責任を負いません。重要なファイルは事前にバックアップを取った上でご利用ください。'
+                      : 'The Tool is provided "AS-IS" without warranties of any kind. The developers and operators shall not be liable for any data loss, file corruption, device issues, or incidental damages arising from the use of the Tool.'}
+                  </p>
+                </div>
+                <div>
+                  <p><strong>{lang === 'ja' ? '第5条（規約の改定）' : 'Article 5 (Modifications to Terms)'}</strong></p>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    {lang === 'ja'
+                      ? '本規約は、機能追加や法令の改正に伴い事前の告知なく改定されることがあります。改定後の規約は本ツール上に掲載された時点で効力を生じるものとします。'
+                      : 'These Terms may be revised at any time without prior notice. Continued use of the Tool constitutes acceptance of the updated terms.'}
+                  </p>
+                </div>
               </div>
             </div>
             <div className="modal-footer">
@@ -659,7 +720,7 @@ export default function App() {
       {/* Privacy Policy Modal */}
       {isPrivacyOpen && (
         <div className="modal-overlay" style={{ display: 'flex' }} onClick={(e) => { if (e.target === e.currentTarget) setIsPrivacyOpen(false); }}>
-          <div className="modal-box">
+          <div className="modal-box" style={{ maxWidth: '640px' }}>
             <div className="modal-header">
               <div className="modal-title">{lang === 'ja' ? 'プライバシーポリシー' : 'Privacy Policy'}</div>
               <button className="modal-close" onClick={() => setIsPrivacyOpen(false)} aria-label="閉じる">
@@ -670,9 +731,39 @@ export default function App() {
               </button>
             </div>
             <div className="modal-body">
-              <div style={{ lineHeight: '1.6', fontSize: '0.8rem' }}>
-                <p><strong>1. 完全ローカル（端末内）処理の原則</strong><br />本ツールはWebAssembly技術を用い、すべての動画・音声変換、波形解析、メタタグ編集、ドキュメント処理をユーザーのブラウザ（端末内）で完結して実行します。処理対象のファイルデータが外部サーバーへアップロードまたは送信されることは一切ありません。</p>
-                <p style={{ marginTop: '6px' }}><strong>2. Google Drive連携</strong><br />Google Drive連携をご利用の場合、Google純正のOAuth 2.0認証（Google Identity Services）を用いてお客様のマイドライブと直接通信します。認証トークンやファイルデータが外部サーバーに送信されることはありません。</p>
+              <div style={{ lineHeight: '1.6', fontSize: '0.82rem' }} className="flex flex-col gap-3">
+                <div>
+                  <p><strong>{lang === 'ja' ? '1. 完全ローカル処理の原則（ファイルデータの非送信）' : '1. 100% Client-Side Local Processing'}</strong></p>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    {lang === 'ja'
+                      ? '本ツールは、動画・音声変換、PDF編集、Office文書変換、画像処理、OCR、差分比較、ZIP処理を含むすべてのデータ処理をお使いの端末ブラウザ内（WebAssembly / JavaScript）で完結して実行します。お客様が読み込んだファイルや変換結果が外部サーバーにアップロードまたは蓄積されることは一切ありません。'
+                      : 'All operations—including video/audio conversion, PDF manipulation, Office documents, OCR, and ZIP archiving—run entirely inside your local web browser via WebAssembly. Your files are never uploaded or stored on any external server.'}
+                  </p>
+                </div>
+                <div>
+                  <p><strong>{lang === 'ja' ? '2. Google Drive連携および直接通信' : '2. Google Drive Integration & Direct HTTPS'}</strong></p>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    {lang === 'ja'
+                      ? 'Google Drive連携をご利用の場合、Google公式のOAuth 2.0認証（Google Identity Services）を通じてユーザーのマイドライブとブラウザ間で直接通信（Direct HTTPS）を行います。認証トークンやファイルデータが第三者のサーバーに中継・保存されることはありません。'
+                      : 'Google Drive integration utilizes official Google Identity Services (OAuth 2.0) for direct, encrypted client-to-Google communication. Access tokens and file contents are never transmitted to or processed by third-party servers.'}
+                  </p>
+                </div>
+                <div>
+                  <p><strong>{lang === 'ja' ? '3. 個人情報およびトラッキングCookieの不保持' : '3. Zero Tracking Cookies & Personal Data Storage'}</strong></p>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    {lang === 'ja'
+                      ? '本ツールは個人情報の収集や広告トラッキングを行いません。言語設定、テーマ、処理履歴等の設定情報はすべてお使いの端末（LocalStorage / IndexedDB）にのみ保存され、ユーザー自身の操作でいつでも消去できます。'
+                      : 'The Tool does not collect personal data, telemetry, or tracking cookies. UI preferences, theme selection, and conversion history reside strictly in your browser (LocalStorage / IndexedDB) and can be cleared at any time.'}
+                  </p>
+                </div>
+                <div>
+                  <p><strong>{lang === 'ja' ? '4. セキュアなCDNリソース読み込み' : '4. Secure CDN Asset Delivery'}</strong></p>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    {lang === 'ja'
+                      ? '本ツールは動作に必要なWASMコアライブラリ等を安全なCDN経由でブラウザにキャッシュして読み込みますが、利用者のファイルデータがCDNに送信されることはありません。また「オフライン用パックを取得」により完全オフライン環境でも利用可能です。'
+                      : 'WASM modules and libraries are delivered via secure CDNs and cached locally. No user data is sent to CDNs. Offline packs are also available for air-gapped environments.'}
+                  </p>
+                </div>
               </div>
             </div>
             <div className="modal-footer">

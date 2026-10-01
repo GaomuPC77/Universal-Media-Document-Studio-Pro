@@ -8,6 +8,7 @@ import {
   ScanText,
   GitCompare,
   Archive,
+  History,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -32,6 +33,7 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({ activeTab, setActi
     { id: 'ocr-qr', labelJa: 'OCR・QR', labelEn: 'OCR & QR', icon: ScanText },
     { id: 'diff-suite', labelJa: '差分比較', labelEn: 'Diff Studio', icon: GitCompare },
     { id: 'zip-suite', labelJa: 'ZIPアーカイブ', labelEn: 'ZIP & Rename', icon: Archive },
+    { id: 'history', labelJa: '履歴', labelEn: 'History', icon: History },
   ];
 
   const checkScrollability = () => {

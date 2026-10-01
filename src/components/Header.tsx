@@ -20,8 +20,8 @@ interface HeaderProps {
   setTheme: (theme: 'auto' | 'light' | 'dark') => void;
   lang: 'ja' | 'en';
   setLang: (lang: 'ja' | 'en') => void;
-  onOpenDrivePicker: () => void;
-  onOpenHistory: () => void;
+  onOpenDrivePicker?: () => void;
+  onOpenHistory?: () => void;
   onDownloadOfflinePack: () => void;
   onOpenTutorial: () => void;
   onShareApp: () => void;
@@ -32,8 +32,6 @@ export const Header: React.FC<HeaderProps> = ({
   setTheme,
   lang,
   setLang,
-  onOpenDrivePicker,
-  onOpenHistory,
   onDownloadOfflinePack,
   onOpenTutorial,
   onShareApp,
@@ -108,27 +106,8 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         </div>
 
-        {/* Right Column 2: Drive, History, Lang & Theme */}
+        {/* Right Column 2: Lang & Theme */}
         <div className="header-col-right-2">
-          <button
-            onClick={onOpenDrivePicker}
-            className="btn-header inline-flex items-center gap-1.5"
-            title={lang === 'ja' ? 'Google Drive クラウド連携' : 'Google Drive Cloud Storage'}
-            style={{ background: 'rgba(2, 132, 199, 0.08)', borderColor: '#0284c7', color: '#0284c7' }}
-          >
-            <HardDrive className="w-3.5 h-3.5" />
-            <span>Drive</span>
-          </button>
-
-          <button
-            onClick={onOpenHistory}
-            className="btn-header inline-flex items-center gap-1.5"
-            title={lang === 'ja' ? 'ブラウザ内ローカル処理履歴' : 'Local Storage History'}
-          >
-            <History className="w-3.5 h-3.5 text-slate-500" />
-            <span>{lang === 'ja' ? '履歴' : 'History'}</span>
-          </button>
-
           <select
             id="langSelect"
             value={lang}
