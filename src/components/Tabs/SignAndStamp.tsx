@@ -10,19 +10,35 @@ import {
   Trash2,
   CheckCircle2,
   Sliders,
-  Sparkles,
+  FileText,
 } from 'lucide-react';
-import { HankoConfig, SignatureStampPlacement, RedactionBox } from '../../types';
+import { HankoConfig, SignatureStampPlacement, RedactionBox, FileItem } from '../../types';
 import { generateHankoImage } from '../../utils/hankoUtils';
-import { getPdfPages, enhancePdf } from '../../utils/pdfUtils';
+import { getPdfPages, stampPdf } from '../../utils/pdfUtils';
+import { saveProcessedFile } from '../../utils/historyDb';
+import { notifyCompletion } from '../../utils/notification';
+import { AddToQueuePromptModal } from '../Modals/AddToQueuePromptModal';
 
 interface SignAndStampProps {
   lang: 'ja' | 'en';
   sharedFile?: File | null;
+  fileList?: FileItem[];
+  onResultReady?: (item: FileItem) => void;
+  onShowToast?: (msg: string) => void;
+  onAddFiles?: (files: File[]) => void;
 }
 
-export const SignAndStamp: React.FC<SignAndStampProps> = ({ lang, sharedFile }) => {
+export const SignAndStamp: React.FC<SignAndStampProps> = ({
+  lang,
+  sharedFile,
+  fileList = [],
+  onResultReady,
+  onShowToast,
+  onAddFiles,
+}) => {
   const [activeTab, setActiveTab] = useState<'hanko' | 'signature' | 'pdf-signer'>('hanko');
+  const [selectedPdfId, setSelectedPdfId] = useState<string>('');
+  const [pendingPromptFile, setPendingPromptFile] = useState<File | null>(null);
 
   // Hanko Config State
   const [hankoConfig, setHankoConfig] = useState<HankoConfig>({
@@ -57,12 +73,18 @@ export const SignAndStamp: React.FC<SignAndStampProps> = ({ lang, sharedFile }) 
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
-  // Auto load shared PDF when dropped
+  // Auto load shared PDF when dropped or from fileList
   useEffect(() => {
     if (sharedFile && (sharedFile.name.toLowerCase().endsWith('.pdf') || sharedFile.type === 'application/pdf')) {
       handleLoadPdf(sharedFile);
+    } else if (fileList.length > 0 && !pdfFile) {
+      const found = fileList.find((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'));
+      if (found && found.file) {
+        setSelectedPdfId(found.id);
+        handleLoadPdf(found.file);
+      }
     }
-  }, [sharedFile]);
+  }, [sharedFile, fileList]);
 
   // Update Hanko on config change
   useEffect(() => {
@@ -189,22 +211,39 @@ export const SignAndStamp: React.FC<SignAndStampProps> = ({ lang, sharedFile }) 
   const handleExportSignedPdf = async () => {
     if (!pdfFile) return;
     setIsExportingPdf(true);
+    const resultName = `Signed_${pdfFile.name}`;
     try {
       const fileBuffer = await pdfFile.arrayBuffer();
-      const signedBytes = await enhancePdf(fileBuffer, {
-        stamps,
-        redactions,
-      });
+      const signedBytes = await stampPdf(fileBuffer, stamps, redactions);
 
       const blob = new Blob([signedBytes], { type: 'application/pdf' });
+      await saveProcessedFile(`pdf_signed_${Date.now()}`, pdfFile.name, resultName, blob, 'pdf');
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Signed_${pdfFile.name}`;
+      a.download = resultName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      if (onResultReady) {
+        onResultReady({
+          id: `res_signed_${Date.now()}`,
+          name: resultName,
+          file: new File([blob], resultName, { type: 'application/pdf' }),
+          size: blob.size,
+          type: 'application/pdf',
+          format: 'pdf',
+          targetFormat: 'pdf',
+          status: 'done',
+          progress: 100,
+          resultBlob: blob,
+          resultName,
+        });
+      }
+      notifyCompletion(lang === 'ja' ? 'PDFへの電子捺印・署名が完了しました' : 'PDF Signed & Stamped', resultName);
+      if (onShowToast) onShowToast(lang === 'ja' ? `「${resultName}」を作成しました` : `Saved "${resultName}"`);
     } catch (e) {
       console.error('Failed to export signed PDF:', e);
     } finally {
@@ -214,6 +253,32 @@ export const SignAndStamp: React.FC<SignAndStampProps> = ({ lang, sharedFile }) 
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl mx-auto">
+      {/* Add To Queue Confirmation Modal */}
+      <AddToQueuePromptModal
+        file={pendingPromptFile}
+        isOpen={!!pendingPromptFile}
+        lang={lang}
+        onConfirmAddToQueue={() => {
+          if (!pendingPromptFile) return;
+          if (onAddFiles) {
+            onAddFiles([pendingPromptFile]);
+          }
+          handleLoadPdf(pendingPromptFile);
+          if (onShowToast) {
+            onShowToast(lang === 'ja' ? '変換・処理ステータス（全体キュー）に追加しました' : 'Added to global status queue');
+          }
+          setPendingPromptFile(null);
+        }}
+        onUseLocalOnly={() => {
+          if (!pendingPromptFile) return;
+          handleLoadPdf(pendingPromptFile);
+          if (onShowToast) {
+            onShowToast(lang === 'ja' ? 'このタブのみに読み込みました' : 'Loaded into this tab only');
+          }
+          setPendingPromptFile(null);
+        }}
+      />
+
       {/* Sub Tabs */}
       <div className="grid grid-cols-3 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 max-w-lg mx-auto w-full">
         {[
@@ -507,10 +572,43 @@ export const SignAndStamp: React.FC<SignAndStampProps> = ({ lang, sharedFile }) 
               accept="application/pdf"
               className="hidden"
               onChange={(e) => {
-                if (e.target.files && e.target.files[0]) handleLoadPdf(e.target.files[0]);
+                if (e.target.files && e.target.files[0]) {
+                  setPendingPromptFile(e.target.files[0]);
+                  e.target.value = '';
+                }
               }}
             />
           </div>
+
+          {/* Select Loaded PDF */}
+          {fileList.length > 0 && (
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                {lang === 'ja' ? '読み込み済みPDFから選択:' : 'Select from Loaded PDFs:'}
+              </label>
+              <select
+                value={selectedPdfId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setSelectedPdfId(id);
+                  const found = fileList.find((f) => f.id === id);
+                  if (found && found.file) {
+                    handleLoadPdf(found.file);
+                  }
+                }}
+                className="main-select"
+              >
+                <option value="">{lang === 'ja' ? '-- アップロードされたPDFを選択 --' : '-- Select Loaded PDF --'}</option>
+                {fileList
+                  .filter((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'))
+                  .map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name} ({(f.size / 1024).toFixed(1)} KB)
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
 
           {!pdfFile ? (
             <div

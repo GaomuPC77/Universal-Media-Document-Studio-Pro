@@ -20,13 +20,27 @@ import { PdfPageInfo } from '../../types';
 import { getPdfPages, mergePdfs, manipulatePdfPages, enhancePdf, extractPdfText, convertPdfToImages } from '../../utils/pdfUtils';
 import { createZipArchive } from '../../utils/zipUtils';
 import { saveProcessedFile } from '../../utils/historyDb';
+import { FileItem } from '../../types';
+import { notifyCompletion } from '../../utils/notification';
+import { AddToQueuePromptModal } from '../Modals/AddToQueuePromptModal';
 
 interface PdfSuiteProps {
   lang: 'ja' | 'en';
   sharedFile?: File | null;
+  fileList?: FileItem[];
+  onResultReady?: (item: FileItem) => void;
+  onShowToast?: (msg: string) => void;
+  onAddFiles?: (files: File[]) => void;
 }
 
-export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
+export const PdfSuite: React.FC<PdfSuiteProps> = ({
+  lang,
+  sharedFile,
+  fileList = [],
+  onResultReady,
+  onShowToast,
+  onAddFiles,
+}) => {
   const [activeSubTab, setActiveSubTab] = useState<'organize' | 'merge' | 'split' | 'watermark' | 'numbering'>('organize');
 
   // State for Organize / Delete / Rotate
@@ -36,6 +50,7 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
   const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
   const [isLoadingPages, setIsLoadingPages] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [pendingPromptFile, setPendingPromptFile] = useState<{ file: File; mode: 'organize' | 'merge' } | null>(null);
 
   // State for Merge
   const [mergeFiles, setMergeFiles] = useState<{ id: string; file: File; name: string; size: number }[]>([]);
@@ -74,7 +89,7 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
     }
   };
 
-  // Auto load sharedFile when dropped
+  // Auto load sharedFile or from fileList
   useEffect(() => {
     if (sharedFile) {
       if (sharedFile.name.toLowerCase().endsWith('.pdf') || sharedFile.type === 'application/pdf') {
@@ -84,8 +99,19 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
           return [...prev, { id: `m_${Date.now()}`, file: sharedFile, name: sharedFile.name, size: sharedFile.size }];
         });
       }
+    } else if (fileList.length > 0 && !currentFile) {
+      const found = fileList.find((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'));
+      if (found && found.file) {
+        handleLoadPdf(found.file);
+      }
+      if (mergeFiles.length === 0) {
+        const allPdfs = fileList.filter((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'));
+        if (allPdfs.length > 0) {
+          setMergeFiles(allPdfs.map((f) => ({ id: f.id, file: f.file, name: f.name, size: f.size })));
+        }
+      }
     }
-  }, [sharedFile]);
+  }, [sharedFile, fileList]);
 
   // Toggle page selection for deletion / export
   const togglePageSelection = (pageNumber: number) => {
@@ -138,19 +164,38 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
 
       const modifiedPdfBytes = await manipulatePdfPages(fileBuffer, {
         keepPageIndices: indicesToKeep,
-        rotations: pageRotations,
+        pageRotations: pageRotations,
       });
 
       const blob = new Blob([modifiedPdfBytes], { type: 'application/pdf' });
-      await saveProcessedFile(`pdf_org_${Date.now()}`, currentFile.name, `Organized_${currentFile.name}`, blob, 'pdf');
+      const resultName = `Organized_${currentFile.name}`;
+      await saveProcessedFile(`pdf_org_${Date.now()}`, currentFile.name, resultName, blob, 'pdf');
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Organized_${currentFile.name}`;
+      a.download = resultName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      if (onResultReady) {
+        onResultReady({
+          id: `res_org_${Date.now()}`,
+          name: resultName,
+          file: new File([blob], resultName, { type: 'application/pdf' }),
+          size: blob.size,
+          type: 'application/pdf',
+          format: 'pdf',
+          targetFormat: 'pdf',
+          status: 'done',
+          progress: 100,
+          resultBlob: blob,
+          resultName,
+        });
+      }
+      notifyCompletion(lang === 'ja' ? 'PDFページの整理・保存が完了しました' : 'PDF Saved', resultName);
+      if (onShowToast) onShowToast(lang === 'ja' ? `「${resultName}」を作成しました` : `Saved "${resultName}"`);
     } catch (err) {
       console.error('Error modifying PDF:', err);
     } finally {
@@ -176,6 +221,24 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      if (onResultReady) {
+        onResultReady({
+          id: `res_merge_${Date.now()}`,
+          name: outName,
+          file: new File([blob], outName, { type: 'application/pdf' }),
+          size: blob.size,
+          type: 'application/pdf',
+          format: 'pdf',
+          targetFormat: 'pdf',
+          status: 'done',
+          progress: 100,
+          resultBlob: blob,
+          resultName: outName,
+        });
+      }
+      notifyCompletion(lang === 'ja' ? 'PDFの結合が完了しました' : 'PDF Merge Complete', outName);
+      if (onShowToast) onShowToast(lang === 'ja' ? `「${outName}」を作成しました` : `Saved "${outName}"`);
     } catch (err) {
       console.error('Failed to merge PDFs:', err);
     } finally {
@@ -216,7 +279,6 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
           chunkIndex++;
         }
       } else if (mode === 'range') {
-        // Parse range: e.g. "1-3, 4-5"
         const groups = splitRange.split(',').map((s) => s.trim()).filter(Boolean);
         let groupIdx = 1;
         for (const grp of groups) {
@@ -248,24 +310,64 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
 
       if (zipFiles.length === 1) {
         const blob = new Blob([zipFiles[0].content], { type: 'application/pdf' });
+        const resultName = zipFiles[0].name;
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = zipFiles[0].name;
+        a.download = resultName;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+
+        await saveProcessedFile(`pdf_split_${Date.now()}`, currentFile.name, resultName, blob, 'pdf');
+        if (onResultReady) {
+          onResultReady({
+            id: `res_split_${Date.now()}`,
+            name: resultName,
+            file: new File([blob], resultName, { type: 'application/pdf' }),
+            size: blob.size,
+            type: 'application/pdf',
+            format: 'pdf',
+            targetFormat: 'pdf',
+            status: 'done',
+            progress: 100,
+            resultBlob: blob,
+            resultName,
+          });
+        }
+        notifyCompletion(lang === 'ja' ? 'PDFの抽出・分割が完了しました' : 'PDF Split Complete', resultName);
+        if (onShowToast) onShowToast(lang === 'ja' ? `「${resultName}」を作成しました` : `Saved "${resultName}"`);
       } else if (zipFiles.length > 1) {
         const zipBlob = await createZipArchive(zipFiles.map((zf) => ({ name: zf.name, content: zf.content })));
+        const resultName = `${baseName}_split_pages.zip`;
         const url = URL.createObjectURL(zipBlob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${baseName}_split_pages.zip`;
+        a.download = resultName;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+
+        await saveProcessedFile(`pdf_split_${Date.now()}`, currentFile.name, resultName, zipBlob, 'zip');
+        if (onResultReady) {
+          onResultReady({
+            id: `res_splitzip_${Date.now()}`,
+            name: resultName,
+            file: new File([zipBlob], resultName, { type: 'application/zip' }),
+            size: zipBlob.size,
+            type: 'application/zip',
+            format: 'zip',
+            targetFormat: 'zip',
+            status: 'done',
+            progress: 100,
+            resultBlob: zipBlob,
+            resultName,
+          });
+        }
+        notifyCompletion(lang === 'ja' ? 'PDFの分割ZIPが完了しました' : 'PDF Split ZIP Complete', resultName);
+        if (onShowToast) onShowToast(lang === 'ja' ? `「${resultName}」を作成しました` : `Saved "${resultName}"`);
       }
     } catch (err) {
       console.error('Failed to split PDF:', err);
@@ -278,6 +380,7 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
   const handleApplyEnhancements = async () => {
     if (!currentFile) return;
     setIsProcessing(true);
+    const resultName = `${activeSubTab === 'watermark' ? 'Watermarked_' : 'Numbered_'}${currentFile.name}`;
     try {
       const fileBuffer = await currentFile.arrayBuffer();
       const enhancedBytes = await enhancePdf(fileBuffer, {
@@ -298,14 +401,33 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
       });
 
       const blob = new Blob([enhancedBytes], { type: 'application/pdf' });
+      await saveProcessedFile(`pdf_enh_${Date.now()}`, currentFile.name, resultName, blob, 'pdf');
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${activeSubTab === 'watermark' ? 'Watermarked_' : 'Numbered_'}${currentFile.name}`;
+      a.download = resultName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      if (onResultReady) {
+        onResultReady({
+          id: `res_enh_${Date.now()}`,
+          name: resultName,
+          file: new File([blob], resultName, { type: 'application/pdf' }),
+          size: blob.size,
+          type: 'application/pdf',
+          format: 'pdf',
+          targetFormat: 'pdf',
+          status: 'done',
+          progress: 100,
+          resultBlob: blob,
+          resultName,
+        });
+      }
+      notifyCompletion(lang === 'ja' ? 'PDFの加工が完了しました' : 'PDF Processed', resultName);
+      if (onShowToast) onShowToast(lang === 'ja' ? `「${resultName}」を作成しました` : `Saved "${resultName}"`);
     } catch (err) {
       console.error('Failed to apply enhancements:', err);
     } finally {
@@ -343,6 +465,112 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
         })}
       </div>
 
+      {/* Add To Queue Confirmation Modal */}
+      <AddToQueuePromptModal
+        file={pendingPromptFile?.file || null}
+        isOpen={!!pendingPromptFile}
+        lang={lang}
+        onConfirmAddToQueue={() => {
+          if (!pendingPromptFile) return;
+          const { file, mode } = pendingPromptFile;
+          if (onAddFiles) {
+            onAddFiles([file]);
+          } else if (onResultReady) {
+            onResultReady({
+              id: `file_${Date.now()}`,
+              name: file.name,
+              size: file.size,
+              type: file.type,
+              format: 'pdf',
+              targetFormat: 'docx',
+              status: 'idle',
+              progress: 0,
+              file,
+            });
+          }
+          if (mode === 'organize') {
+            handleLoadPdf(file);
+          } else {
+            setMergeFiles((prev) => [
+              ...prev,
+              { id: `m_${Date.now()}`, file, name: file.name, size: file.size },
+            ]);
+          }
+          if (onShowToast) {
+            onShowToast(lang === 'ja' ? '変換・処理ステータス（全体キュー）に追加しました' : 'Added to global status queue');
+          }
+          setPendingPromptFile(null);
+        }}
+        onUseLocalOnly={() => {
+          if (!pendingPromptFile) return;
+          const { file, mode } = pendingPromptFile;
+          if (mode === 'organize') {
+            handleLoadPdf(file);
+          } else {
+            setMergeFiles((prev) => [
+              ...prev,
+              { id: `m_${Date.now()}`, file, name: file.name, size: file.size },
+            ]);
+          }
+          if (onShowToast) {
+            onShowToast(lang === 'ja' ? 'このタブのみに読み込みました' : 'Loaded into this tab only');
+          }
+          setPendingPromptFile(null);
+        }}
+      />
+
+      {/* Global Queue File Selection & Multi-select Bar */}
+      {fileList.length > 0 && (
+        <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <Layers className="w-3.5 h-3.5 text-blue-600" />
+            <span className="font-bold text-slate-700 dark:text-slate-300">
+              {lang === 'ja' ? '読み込み済みPDFから選択:' : 'Select Loaded PDF:'}
+            </span>
+            <select
+              value={currentFile?.name || ''}
+              onChange={(e) => {
+                const found = fileList.find((f) => f.name === e.target.value);
+                if (found && found.file) {
+                  handleLoadPdf(found.file);
+                }
+              }}
+              className="main-select text-xs py-1"
+            >
+              <option value="">{lang === 'ja' ? '-- PDFを選択 --' : '-- Choose PDF --'}</option>
+              {fileList
+                .filter((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'))
+                .map((f) => (
+                  <option key={f.id} value={f.name}>
+                    {f.name} ({(f.size / 1024).toFixed(1)} KB)
+                  </option>
+                ))}
+            </select>
+          </div>
+
+          {activeSubTab === 'merge' && (
+            <button
+              onClick={() => {
+                const pdfs = fileList.filter((f) => (f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf')) && f.file);
+                if (pdfs.length > 0) {
+                  const newItems = pdfs.map((f) => ({ id: `m_${f.id}`, file: f.file!, name: f.name, size: f.size }));
+                  setMergeFiles((prev) => {
+                    const existingNames = new Set(prev.map((p) => p.name));
+                    const unique = newItems.filter((item) => !existingNames.has(item.name));
+                    return [...prev, ...unique];
+                  });
+                  if (onShowToast) onShowToast(lang === 'ja' ? `読み込み済みPDF ${pdfs.length}件を結合リストに追加しました` : `Added ${pdfs.length} loaded PDFs to merge list`);
+                }
+              }}
+              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-1.5 shadow-xs"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>{lang === 'ja' ? 'キューのPDFを一括結合に追加' : 'Add All Loaded PDFs to Merge'}</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 1. Page Organizer / Delete / Rotate Tab */}
       {activeSubTab === 'organize' && (
         <div className="flex flex-col gap-5">
@@ -357,7 +585,10 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
                 accept="application/pdf"
                 className="hidden"
                 onChange={(e) => {
-                  if (e.target.files && e.target.files[0]) handleLoadPdf(e.target.files[0]);
+                  if (e.target.files && e.target.files[0]) {
+                    setPendingPromptFile({ file: e.target.files[0], mode: 'organize' });
+                    e.target.value = '';
+                  }
                 }}
               />
               <div className="w-14 h-14 rounded-2xl bg-blue-100 dark:bg-blue-950 text-blue-600 flex items-center justify-center mb-3">
@@ -537,14 +768,8 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({ lang, sharedFile }) => {
               accept="application/pdf"
               className="hidden"
               onChange={(e) => {
-                if (e.target.files) {
-                  const newItems = Array.from(e.target.files).map((f: File) => ({
-                    id: Math.random().toString(36).substring(2, 9),
-                    file: f,
-                    name: f.name,
-                    size: f.size,
-                  }));
-                  setMergeFiles((prev) => [...prev, ...newItems]);
+                if (e.target.files && e.target.files[0]) {
+                  setPendingPromptFile({ file: e.target.files[0], mode: 'merge' });
                 }
                 e.target.value = '';
               }}

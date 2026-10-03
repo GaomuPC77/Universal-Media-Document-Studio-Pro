@@ -8,23 +8,40 @@ import {
   RefreshCw,
   Plus,
   Trash2,
-  Sparkles,
   Sliders,
   CheckCircle2,
+  Eye,
+  Check,
 } from 'lucide-react';
 import { convertPdfToImages, imagesToPdf } from '../../utils/pdfUtils';
 import { createZipArchive } from '../../utils/zipUtils';
 import { saveProcessedFile } from '../../utils/historyDb';
+import { FileItem } from '../../types';
+import { notifyCompletion } from '../../utils/notification';
+import { AddToQueuePromptModal } from '../Modals/AddToQueuePromptModal';
 
 interface PdfImageSuiteProps {
   lang: 'ja' | 'en';
   sharedFile?: File | null;
+  fileList?: FileItem[];
+  onResultReady?: (item: FileItem) => void;
+  onShowToast?: (msg: string) => void;
+  onAddFiles?: (files: File[]) => void;
 }
 
-export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({ lang, sharedFile }) => {
+export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
+  lang,
+  sharedFile,
+  fileList = [],
+  onResultReady,
+  onShowToast,
+  onAddFiles,
+}) => {
   const [activeMode, setActiveMode] = useState<'pdf-to-img' | 'img-to-pdf'>('pdf-to-img');
+  const [pendingPromptFile, setPendingPromptFile] = useState<{ file: File; mode: 'pdf' | 'img' } | null>(null);
 
   // PDF to Image state
+  const [selectedPdfId, setSelectedPdfId] = useState<string>('');
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [imgFormat, setImgFormat] = useState<'png' | 'jpg' | 'webp'>('png');
   const [dpi, setDpi] = useState<number>(150);
@@ -32,7 +49,14 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({ lang, sharedFile }
   const [convertedImages, setConvertedImages] = useState<{ name: string; blob: Blob; pageNumber: number; url: string }[]>([]);
   const [convertProgress, setConvertProgress] = useState<{ current: number; total: number } | null>(null);
 
-  // Auto load shared file
+  // Image to PDF state
+  const [imageFiles, setImageFiles] = useState<{ id: string; file: File; name: string; previewUrl: string; size: number }[]>([]);
+  const [pageSize, setPageSize] = useState<'A4' | 'Letter' | 'Fit'>('A4');
+  const [orientation, setOrientation] = useState<'portrait' | 'landscape' | 'auto'>('auto');
+  const [margin, setMargin] = useState<number>(20);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+
+  // Auto load shared file or from fileList
   useEffect(() => {
     if (sharedFile) {
       if (sharedFile.name.toLowerCase().endsWith('.pdf') || sharedFile.type === 'application/pdf') {
@@ -46,18 +70,31 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({ lang, sharedFile }
           { id: `img_${Date.now()}`, file: sharedFile, name: sharedFile.name, previewUrl: url, size: sharedFile.size },
         ]);
       }
+    } else if (fileList.length > 0) {
+      if (!pdfFile) {
+        const foundPdf = fileList.find((f) => f.format === 'pdf' && f.file);
+        if (foundPdf && foundPdf.file) {
+          setSelectedPdfId(foundPdf.id);
+          setPdfFile(foundPdf.file);
+        }
+      }
+      // Populate image files if in img-to-pdf mode and none loaded
+      if (imageFiles.length === 0) {
+        const loadedImgs = fileList.filter((f) => ['png', 'jpg', 'jpeg', 'webp', 'bmp'].includes(f.format) && f.file);
+        if (loadedImgs.length > 0) {
+          setImageFiles(
+            loadedImgs.map((img) => ({
+              id: img.id,
+              file: img.file!,
+              name: img.name,
+              previewUrl: URL.createObjectURL(img.file!),
+              size: img.size,
+            }))
+          );
+        }
+      }
     }
-  }, [sharedFile]);
-
-  // Image to PDF state
-  const [imageFiles, setImageFiles] = useState<{ id: string; file: File; name: string; previewUrl: string; size: number }[]>([]);
-  const [pageSize, setPageSize] = useState<'A4' | 'Letter' | 'Fit'>('A4');
-  const [orientation, setOrientation] = useState<'portrait' | 'landscape' | 'auto'>('auto');
-  const [margin, setMargin] = useState<number>(20);
-  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
-
-  const pdfInputRef = useRef<HTMLInputElement>(null);
-  const imgInputRef = useRef<HTMLInputElement>(null);
+  }, [sharedFile, fileList]);
 
   // Handle PDF file selection
   const handleSelectPdf = (file: File) => {
@@ -68,9 +105,14 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({ lang, sharedFile }
 
   // Convert PDF to Images
   const handleConvertPdfToImages = async () => {
-    if (!pdfFile) return;
+    if (!pdfFile) {
+      if (onShowToast) onShowToast(lang === 'ja' ? 'PDFファイルを選択してください' : 'Please select a PDF file');
+      return;
+    }
     setIsConverting(true);
     setConvertedImages([]);
+    const baseName = pdfFile.name.replace(/\.pdf$/i, '');
+
     try {
       const results = await convertPdfToImages(pdfFile, {
         format: imgFormat,
@@ -84,8 +126,62 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({ lang, sharedFile }
       }));
 
       setConvertedImages(itemsWithUrls);
-    } catch (err) {
+
+      // Save individual images and/or ZIP to history
+      if (results.length === 1) {
+        const single = results[0];
+        const resName = `${baseName}.${imgFormat}`;
+        await saveProcessedFile(`pdf_img_${Date.now()}`, pdfFile.name, resName, single.blob, imgFormat);
+        if (onResultReady) {
+          onResultReady({
+            id: `res_img_${Date.now()}`,
+            name: resName,
+            file: new File([single.blob], resName, { type: `image/${imgFormat}` }),
+            size: single.blob.size,
+            type: `image/${imgFormat}`,
+            format: imgFormat as any,
+            targetFormat: imgFormat as any,
+            status: 'done',
+            progress: 100,
+            resultBlob: single.blob,
+            resultName: resName,
+          });
+        }
+      } else if (results.length > 1) {
+        const zipFiles = results.map((img) => ({
+          name: `${baseName}_p${img.pageNumber}.${imgFormat}`,
+          content: img.blob,
+        }));
+        const zipBlob = await createZipArchive(zipFiles);
+        const zipName = `${baseName}_images_${dpi}dpi.zip`;
+        await saveProcessedFile(`pdf_img_zip_${Date.now()}`, pdfFile.name, zipName, zipBlob, 'zip');
+        if (onResultReady) {
+          onResultReady({
+            id: `res_zip_${Date.now()}`,
+            name: zipName,
+            file: new File([zipBlob], zipName, { type: 'application/zip' }),
+            size: zipBlob.size,
+            type: 'application/zip',
+            format: 'zip',
+            targetFormat: 'zip',
+            status: 'done',
+            progress: 100,
+            resultBlob: zipBlob,
+            resultName: zipName,
+          });
+        }
+      }
+
+      notifyCompletion(
+        lang === 'ja' ? 'PDFから画像への変換が完了しました' : 'PDF to Images Converted',
+        `${results.length} pages converted`
+      );
+      if (onShowToast) {
+        onShowToast(lang === 'ja' ? `${results.length} ページの画像変換が完了しました` : `Converted ${results.length} pages`);
+      }
+    } catch (err: any) {
       console.error('Failed to convert PDF to images:', err);
+      alert(lang === 'ja' ? '画像変換に失敗しました: ' + err.message : 'Failed to convert PDF to images');
     } finally {
       setIsConverting(false);
     }
@@ -96,7 +192,7 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({ lang, sharedFile }
     if (convertedImages.length === 0 || !pdfFile) return;
     const baseName = pdfFile.name.replace(/\.pdf$/i, '');
     const zipFiles = convertedImages.map((img) => ({
-      name: img.name,
+      name: `${baseName}_p${img.pageNumber}.${imgFormat}`,
       content: img.blob,
     }));
     const zipBlob = await createZipArchive(zipFiles);
@@ -112,8 +208,13 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({ lang, sharedFile }
 
   // Handle Images to PDF creation
   const handleGeneratePdfFromImages = async () => {
-    if (imageFiles.length === 0) return;
+    if (imageFiles.length === 0) {
+      if (onShowToast) onShowToast(lang === 'ja' ? '画像ファイルを追加してください' : 'Please select image files');
+      return;
+    }
     setIsGeneratingPdf(true);
+    const resultName = `Combined_Images_${new Date().toISOString().slice(0, 10)}.pdf`;
+
     try {
       const loadedBuffers = await Promise.all(
         imageFiles.map(async (f) => ({
@@ -133,20 +234,86 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({ lang, sharedFile }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Combined_Images_${new Date().toISOString().slice(0, 10)}.pdf`;
+      a.download = resultName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch (err) {
+
+      await saveProcessedFile(`img_pdf_${Date.now()}`, 'images_batch', resultName, blob, 'pdf');
+
+      if (onResultReady) {
+        onResultReady({
+          id: `res_imgpdf_${Date.now()}`,
+          name: resultName,
+          file: new File([blob], resultName, { type: 'application/pdf' }),
+          size: blob.size,
+          type: 'application/pdf',
+          format: 'pdf',
+          targetFormat: 'pdf',
+          status: 'done',
+          progress: 100,
+          resultBlob: blob,
+          resultName,
+        });
+      }
+
+      notifyCompletion(lang === 'ja' ? '画像からPDFの作成が完了しました' : 'Images to PDF Created', resultName);
+      if (onShowToast) onShowToast(lang === 'ja' ? `「${resultName}」を作成・保存しました` : `Created "${resultName}"`);
+    } catch (err: any) {
       console.error('Failed to generate PDF from images:', err);
+      alert(lang === 'ja' ? 'PDF作成に失敗しました: ' + err.message : 'Images to PDF failed');
     } finally {
       setIsGeneratingPdf(false);
     }
   };
 
   return (
-    <div className="flex flex-col gap-6 max-w-5xl mx-auto">
+    <div className="flex flex-col gap-4 w-full">
+      {/* Add To Queue Confirmation Modal */}
+      <AddToQueuePromptModal
+        file={pendingPromptFile?.file || null}
+        isOpen={!!pendingPromptFile}
+        lang={lang}
+        onConfirmAddToQueue={() => {
+          if (!pendingPromptFile) return;
+          const { file, mode } = pendingPromptFile;
+          if (onAddFiles) {
+            onAddFiles([file]);
+          }
+          if (mode === 'pdf') {
+            handleSelectPdf(file);
+          } else {
+            const url = URL.createObjectURL(file);
+            setImageFiles((prev) => [
+              ...prev,
+              { id: `img_${Date.now()}`, file, name: file.name, previewUrl: url, size: file.size },
+            ]);
+          }
+          if (onShowToast) {
+            onShowToast(lang === 'ja' ? '変換・処理ステータス（全体キュー）に追加しました' : 'Added to global status queue');
+          }
+          setPendingPromptFile(null);
+        }}
+        onUseLocalOnly={() => {
+          if (!pendingPromptFile) return;
+          const { file, mode } = pendingPromptFile;
+          if (mode === 'pdf') {
+            handleSelectPdf(file);
+          } else {
+            const url = URL.createObjectURL(file);
+            setImageFiles((prev) => [
+              ...prev,
+              { id: `img_${Date.now()}`, file, name: file.name, previewUrl: url, size: file.size },
+            ]);
+          }
+          if (onShowToast) {
+            onShowToast(lang === 'ja' ? 'このタブのみに読み込みました' : 'Loaded into this tab only');
+          }
+          setPendingPromptFile(null);
+        }}
+      />
+
       {/* Mode Switcher */}
       <div className="grid grid-cols-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 max-w-md mx-auto w-full">
         <button
@@ -158,8 +325,9 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({ lang, sharedFile }
           }`}
         >
           <ImageIcon className="w-4 h-4" />
-          <span>{lang === 'ja' ? 'PDF → 画像に変換' : 'PDF to Images'}</span>
+          <span>{lang === 'ja' ? 'PDF → 画像抽出・変換' : 'PDF to Images'}</span>
         </button>
+
         <button
           onClick={() => setActiveMode('img-to-pdf')}
           className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition ${
@@ -169,290 +337,260 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({ lang, sharedFile }
           }`}
         >
           <FileText className="w-4 h-4" />
-          <span>{lang === 'ja' ? '画像 → PDFに結合' : 'Images to PDF'}</span>
+          <span>{lang === 'ja' ? '画像 → PDF結合作成' : 'Images to PDF'}</span>
         </button>
       </div>
 
-      {/* 1. PDF to Image Converter */}
+      {/* 1. PDF to Image Mode */}
       {activeMode === 'pdf-to-img' && (
-        <div className="flex flex-col gap-5">
-          {!pdfFile ? (
-            <div
-              onClick={() => pdfInputRef.current?.click()}
-              className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 rounded-2xl p-10 flex flex-col items-center justify-center text-center cursor-pointer bg-white/60 dark:bg-slate-900/60 transition"
+        <div className="card flex flex-col gap-4">
+          <div className="section-title">
+            <span className="flex items-center gap-2">
+              <ImageIcon className="w-4 h-4 text-blue-600" />
+              <span>{lang === 'ja' ? 'PDFの全ページを高解像度画像に変換' : 'Convert PDF Pages to High-Res Images'}</span>
+            </span>
+          </div>
+
+          {/* Select Loaded PDF */}
+          <div>
+            <label>{lang === 'ja' ? '変換対象のPDFファイルを選択:' : 'Select Target PDF File:'}</label>
+            <select
+              value={selectedPdfId}
+              onChange={(e) => {
+                const id = e.target.value;
+                setSelectedPdfId(id);
+                const found = fileList.find((f) => f.id === id);
+                if (found && found.file) {
+                  handleSelectPdf(found.file);
+                }
+              }}
+              className="main-select"
             >
-              <input
-                ref={pdfInputRef}
-                type="file"
-                accept="application/pdf"
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files && e.target.files[0]) handleSelectPdf(e.target.files[0]);
-                }}
-              />
-              <div className="w-14 h-14 rounded-2xl bg-blue-100 dark:bg-blue-950 text-blue-600 flex items-center justify-center mb-3">
-                <ImageIcon className="w-7 h-7" />
-              </div>
-              <h4 className="font-bold text-slate-800 dark:text-slate-200 text-base">
-                {lang === 'ja' ? '画像に変換するPDFファイルを選択' : 'Select PDF to convert into images'}
-              </h4>
-              <p className="text-xs text-slate-500 mt-1">
-                {lang === 'ja'
-                  ? '各ページを高解像度PNG / JPG / WebPに変換。300 DPIの高画質印刷用出力にも対応しています。'
-                  : 'Convert every page into crystal clear PNG, JPG, or WebP. Supports 300 DPI print quality.'}
-              </p>
-            </div>
-          ) : (
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm flex flex-col gap-5">
-              {/* Settings and controls */}
-              <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-                <div>
-                  <h3 className="font-bold text-sm text-slate-800 dark:text-slate-100">{pdfFile.name}</h3>
-                  <p className="text-xs text-slate-500">{(pdfFile.size / (1024 * 1024)).toFixed(2)} MB</p>
-                </div>
+              <option value="">{lang === 'ja' ? '-- アップロードされたPDFを選択 --' : '-- Select Loaded PDF --'}</option>
+              {fileList
+                .filter((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'))
+                .map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name} ({(f.size / 1024).toFixed(1)} KB)
+                  </option>
+                ))}
+            </select>
+          </div>
 
-                <div className="flex flex-wrap items-center gap-3">
-                  {/* Format select */}
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-slate-500 font-semibold">{lang === 'ja' ? '形式:' : 'Format:'}</span>
-                    <select
-                      value={imgFormat}
-                      onChange={(e) => setImgFormat(e.target.value as any)}
-                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold"
-                    >
-                      <option value="png">PNG (高画質・可逆圧縮)</option>
-                      <option value="jpg">JPG (写真・容量小)</option>
-                      <option value="webp">WebP (最新・高圧縮)</option>
-                    </select>
-                  </div>
-
-                  {/* DPI select */}
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-slate-500 font-semibold">DPI:</span>
-                    <select
-                      value={dpi}
-                      onChange={(e) => setDpi(parseInt(e.target.value, 10))}
-                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold"
-                    >
-                      <option value={72}>72 DPI (Web・標準)</option>
-                      <option value={150}>150 DPI (高精細・推奨)</option>
-                      <option value={300}>300 DPI (印刷・最高画質)</option>
-                    </select>
-                  </div>
-
+          {/* Settings Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label>{lang === 'ja' ? '画像形式:' : 'Output Image Format:'}</label>
+              <div className="flex gap-2">
+                {(['png', 'jpg', 'webp'] as const).map((fmt) => (
                   <button
-                    onClick={handleConvertPdfToImages}
-                    disabled={isConverting}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition"
+                    key={fmt}
+                    onClick={() => setImgFormat(fmt)}
+                    className={`flex-1 py-2 text-xs font-bold rounded-lg border uppercase transition ${
+                      imgFormat === fmt
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'
+                        : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
+                    }`}
                   >
-                    {isConverting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                    <span>{isConverting ? (lang === 'ja' ? 'レンダリング中...' : 'Rendering...') : lang === 'ja' ? '画像変換を実行' : 'Convert to Images'}</span>
+                    .{fmt}
                   </button>
-                </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label>{lang === 'ja' ? `解像度: ${dpi} DPI` : `Resolution: ${dpi} DPI`}</label>
+              <input
+                type="range"
+                min="72"
+                max="300"
+                step="25"
+                value={dpi}
+                onChange={(e) => setDpi(Number(e.target.value))}
+                className="input-range"
+              />
+              <div className="flex justify-between text-[11px] text-slate-400 mt-1">
+                <span>72 DPI (軽量)</span>
+                <span>150 DPI (標準)</span>
+                <span>300 DPI (印刷品質)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Convert Action */}
+          <button
+            onClick={handleConvertPdfToImages}
+            disabled={!pdfFile || isConverting}
+            className="btn btn-primary flex items-center justify-center gap-2 py-3 mt-2"
+          >
+            {isConverting ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>
+                  {convertProgress
+                    ? `${lang === 'ja' ? 'ページ変換中' : 'Converting'}: ${convertProgress.current} / ${convertProgress.total}`
+                    : lang === 'ja'
+                    ? '変換処理中...'
+                    : 'Converting...'}
+                </span>
+              </>
+            ) : (
+              <>
+                <ImageIcon className="w-4 h-4" />
+                <span>{lang === 'ja' ? 'すべてのページを画像に変換' : 'Convert All Pages to Images'}</span>
+              </>
+            )}
+          </button>
+
+          {/* Converted Results Grid */}
+          {convertedImages.length > 0 && (
+            <div className="flex flex-col gap-3 mt-4 pt-4 border-t border-slate-200 dark:border-slate-800">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-slate-700 dark:text-slate-200">
+                  {lang === 'ja' ? `変換完了 (${convertedImages.length} ページ):` : `Converted (${convertedImages.length} pages):`}
+                </span>
+                <button
+                  onClick={handleDownloadAllZip}
+                  className="btn-header"
+                >
+                  <FolderArchive className="w-3.5 h-3.5 text-blue-600" />
+                  <span>{lang === 'ja' ? '全画像をZIP一括ダウンロード' : 'Download All as ZIP'}</span>
+                </button>
               </div>
 
-              {/* Progress bar if running */}
-              {isConverting && convertProgress && (
-                <div className="flex flex-col gap-2 p-4 bg-blue-50 dark:bg-blue-950/40 rounded-xl border border-blue-200 dark:border-blue-900">
-                  <div className="flex justify-between text-xs font-bold text-blue-700 dark:text-blue-300">
-                    <span>{lang === 'ja' ? 'ページレンダリング中' : 'Rendering pages'}</span>
-                    <span>{convertProgress.current} / {convertProgress.total}</span>
-                  </div>
-                  <div className="w-full bg-blue-200 dark:bg-blue-900 h-2 rounded-full overflow-hidden">
-                    <div
-                      className="bg-blue-600 h-full transition-all duration-200"
-                      style={{ width: `${(convertProgress.current / convertProgress.total) * 100}%` }}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-h-96 overflow-auto p-1">
+                {convertedImages.map((img) => (
+                  <div
+                    key={img.pageNumber}
+                    className="p-2 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col gap-2 group"
+                  >
+                    <img
+                      src={img.url}
+                      alt={img.name}
+                      className="w-full h-32 object-contain bg-white rounded-lg shadow-xs"
                     />
-                  </div>
-                </div>
-              )}
-
-              {/* Converted images display */}
-              {convertedImages.length > 0 && (
-                <div className="flex flex-col gap-4">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-xs text-slate-700 dark:text-slate-300">
-                      {lang === 'ja' ? '変換結果' : 'Converted Pages'} ({convertedImages.length} 枚)
-                    </span>
-                    <button
-                      onClick={handleDownloadAllZip}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition"
-                    >
-                      <FolderArchive className="w-3.5 h-3.5" />
-                      <span>{lang === 'ja' ? '全画像をZIPで一括保存' : 'Download All as ZIP'}</span>
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                    {convertedImages.map((img) => (
-                      <div
-                        key={img.pageNumber}
-                        className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 p-2.5 flex flex-col items-center gap-2 group"
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-medium text-slate-600 dark:text-slate-300">
+                        {lang === 'ja' ? `ページ ${img.pageNumber}` : `Page ${img.pageNumber}`}
+                      </span>
+                      <a
+                        href={img.url}
+                        download={img.name}
+                        className="p-1 rounded-md text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950"
+                        title={lang === 'ja' ? '保存' : 'Download'}
                       >
-                        <div className="w-full aspect-[3/4] bg-white dark:bg-slate-950 rounded-lg overflow-hidden flex items-center justify-center border border-slate-200 dark:border-slate-800 shadow-xs">
-                          <img src={img.url} alt={img.name} className="max-h-full max-w-full object-contain" />
-                        </div>
-                        <div className="w-full flex items-center justify-between text-xs">
-                          <span className="font-semibold text-slate-700 dark:text-slate-300">P.{img.pageNumber}</span>
-                          <a
-                            href={img.url}
-                            download={img.name}
-                            className="p-1 rounded-md bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-blue-600 hover:text-white transition"
-                            title="この画像を保存"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </a>
-                        </div>
-                      </div>
-                    ))}
+                        <Download className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
                   </div>
-                </div>
-              )}
+                ))}
+              </div>
             </div>
           )}
         </div>
       )}
 
-      {/* 2. Images to PDF Converter */}
+      {/* 2. Image to PDF Mode */}
       {activeMode === 'img-to-pdf' && (
-        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm flex flex-col gap-5">
-          <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-800">
-            <div>
-              <h3 className="font-bold text-sm sm:text-base text-slate-800 dark:text-slate-100">
-                {lang === 'ja' ? '複数画像を1つのPDFに結合' : 'Combine Images into Single PDF'}
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                {lang === 'ja'
-                  ? 'PNG, JPG, WebP, SVGなどの画像を追加し、用紙サイズ・余白を設定してPDFを生成します。'
-                  : 'Combine PNG, JPG, WebP, SVG images into formatted multi-page PDF.'}
-              </p>
-            </div>
-
-            <button
-              onClick={() => imgInputRef.current?.click()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-xs"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>{lang === 'ja' ? '画像を追加' : 'Add Images'}</span>
-            </button>
-            <input
-              ref={imgInputRef}
-              type="file"
-              multiple
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files) {
-                  const newItems = Array.from(e.target.files).map((f: File) => ({
-                    id: Math.random().toString(36).substring(2, 9),
-                    file: f,
-                    name: f.name,
-                    previewUrl: URL.createObjectURL(f),
-                    size: f.size,
-                  }));
-                  setImageFiles((prev) => [...prev, ...newItems]);
-                }
-                e.target.value = '';
-              }}
-            />
+        <div className="card flex flex-col gap-4">
+          <div className="section-title">
+            <span className="flex items-center gap-2">
+              <FileText className="w-4 h-4 text-emerald-600" />
+              <span>{lang === 'ja' ? '複数画像を結合して1つのPDFを作成' : 'Combine Images into a Single PDF'}</span>
+            </span>
           </div>
 
-          {imageFiles.length === 0 ? (
-            <div
-              onClick={() => imgInputRef.current?.click()}
-              className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 rounded-xl p-8 flex flex-col items-center justify-center text-center cursor-pointer bg-slate-50/50 transition"
-            >
-              <FileText className="w-10 h-10 text-slate-400 mb-2" />
-              <p className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-300">
-                {lang === 'ja' ? 'PDFにまとめたい画像をドラッグまたは選択' : 'Select images to compile into PDF'}
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-5">
-              {/* Layout settings */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700">
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    {lang === 'ja' ? '用紙サイズ' : 'Page Size'}
-                  </label>
-                  <select
-                    value={pageSize}
-                    onChange={(e) => setPageSize(e.target.value as any)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
-                  >
-                    <option value="A4">A4 (210 x 297 mm)</option>
-                    <option value="Letter">Letter (216 x 279 mm)</option>
-                    <option value="Fit">画像サイズに自動追従 (Fit to image)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    {lang === 'ja' ? '用紙の向き' : 'Orientation'}
-                  </label>
-                  <select
-                    value={orientation}
-                    onChange={(e) => setOrientation(e.target.value as any)}
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
-                  >
-                    <option value="auto">自動判別 (Auto)</option>
-                    <option value="portrait">縦向き (Portrait)</option>
-                    <option value="landscape">横向き (Landscape)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    {lang === 'ja' ? '余白設定' : 'Margins'}
-                  </label>
-                  <select
-                    value={margin}
-                    onChange={(e) => setMargin(parseInt(e.target.value, 10))}
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
-                  >
-                    <option value={0}>余白なし (0 mm)</option>
-                    <option value={20}>狭い余白 (7 mm)</option>
-                    <option value={40}>標準余白 (14 mm)</option>
-                  </select>
-                </div>
+          {/* Image Files Selection from Loaded list */}
+          <div className="flex flex-col gap-2">
+            <label>{lang === 'ja' ? `選択された画像 (${imageFiles.length} 件):` : `Selected Images (${imageFiles.length}):`}</label>
+            {imageFiles.length === 0 ? (
+              <div className="text-center py-6 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-500">
+                {lang === 'ja'
+                  ? '画像が選択されていません。上部「1. 処理するファイルの読み込み・追加」から画像を追加してください。'
+                  : 'No images loaded. Please add images in Section 1 above.'}
               </div>
-
-              {/* Images preview queue */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3">
-                {imageFiles.map((item, idx) => (
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-h-60 overflow-auto p-1">
+                {imageFiles.map((img, idx) => (
                   <div
-                    key={item.id}
-                    className="relative rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 p-2 flex flex-col items-center group"
+                    key={img.id}
+                    className="relative p-2 bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col gap-1"
                   >
-                    <div className="w-full aspect-square bg-white dark:bg-slate-950 rounded-lg overflow-hidden flex items-center justify-center">
-                      <img src={item.previewUrl} alt={item.name} className="max-h-full max-w-full object-contain" />
-                    </div>
-                    <div className="w-full flex items-center justify-between mt-2 pt-1 border-t border-slate-200 dark:border-slate-700 text-[11px]">
-                      <span className="font-bold text-slate-600 dark:text-slate-300">#{idx + 1}</span>
-                      <button
-                        onClick={() => setImageFiles((prev) => prev.filter((f) => f.id !== item.id))}
-                        className="text-slate-400 hover:text-red-500 transition"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                    <img src={img.previewUrl} alt={img.name} className="w-full h-24 object-cover rounded-lg bg-white" />
+                    <div className="text-[11px] font-medium text-slate-600 dark:text-slate-300 truncate">{img.name}</div>
+                    <button
+                      onClick={() => setImageFiles((prev) => prev.filter((_, i) => i !== idx))}
+                      className="absolute top-1 right-1 p-1 rounded-full bg-black/60 text-white hover:bg-rose-600 transition"
+                      title={lang === 'ja' ? '削除' : 'Remove'}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
                   </div>
                 ))}
               </div>
+            )}
+          </div>
 
-              {/* Action Button */}
-              <div className="flex justify-end pt-2">
-                <button
-                  onClick={handleGeneratePdfFromImages}
-                  disabled={isGeneratingPdf}
-                  className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-bold text-xs shadow-md shadow-blue-500/20 transition"
-                >
-                  {isGeneratingPdf ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                  <span>{lang === 'ja' ? 'PDFを生成してダウンロード' : 'Compile & Download PDF'}</span>
-                </button>
-              </div>
+          {/* PDF Page Settings */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label>{lang === 'ja' ? '用紙サイズ:' : 'Page Size:'}</label>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(e.target.value as any)}
+                className="select-field"
+              >
+                <option value="A4">A4 (210 x 297 mm)</option>
+                <option value="Letter">Letter (8.5 x 11 in)</option>
+                <option value="Fit">{lang === 'ja' ? '画像サイズに合わせる (Fit)' : 'Fit to image'}</option>
+              </select>
             </div>
-          )}
+
+            <div>
+              <label>{lang === 'ja' ? 'ページの向き:' : 'Orientation:'}</label>
+              <select
+                value={orientation}
+                onChange={(e) => setOrientation(e.target.value as any)}
+                className="select-field"
+              >
+                <option value="auto">{lang === 'ja' ? '自動判定 (Auto)' : 'Auto detect'}</option>
+                <option value="portrait">{lang === 'ja' ? '縦向き (Portrait)' : 'Portrait'}</option>
+                <option value="landscape">{lang === 'ja' ? '横向き (Landscape)' : 'Landscape'}</option>
+              </select>
+            </div>
+
+            <div>
+              <label>{lang === 'ja' ? `余白: ${margin} pt` : `Margin: ${margin} pt`}</label>
+              <input
+                type="range"
+                min="0"
+                max="50"
+                step="5"
+                value={margin}
+                onChange={(e) => setMargin(Number(e.target.value))}
+                className="input-range"
+              />
+            </div>
+          </div>
+
+          {/* Action Button */}
+          <button
+            onClick={handleGeneratePdfFromImages}
+            disabled={imageFiles.length === 0 || isGeneratingPdf}
+            className="btn btn-primary flex items-center justify-center gap-2 py-3 mt-2"
+          >
+            {isGeneratingPdf ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>{lang === 'ja' ? 'PDFを生成中...' : 'Generating PDF...'}</span>
+              </>
+            ) : (
+              <>
+                <FileText className="w-4 h-4" />
+                <span>{lang === 'ja' ? '画像を結合してPDFを保存' : 'Combine into PDF & Download'}</span>
+              </>
+            )}
+          </button>
         </div>
       )}
     </div>

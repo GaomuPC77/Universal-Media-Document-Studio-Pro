@@ -1,6 +1,8 @@
 export type DocumentFormat =
   | 'pdf'
   | 'docx'
+  | 'pptx'
+  | 'ppt'
   | 'xlsx'
   | 'xls'
   | 'csv'

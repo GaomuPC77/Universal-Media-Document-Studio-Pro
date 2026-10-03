@@ -50,7 +50,7 @@
 }
 
 body.is-offline-edition {
-  border-top: 6px solid #d97706;
+  border-top: 6px solid #d97706 !important;
 }
 body.is-offline-edition .offline-indicator {
   display: inline-block !important;
@@ -59,6 +59,24 @@ body.is-offline-edition .offline-indicator {
   font-weight: 700 !important;
 }
 .offline-indicator { display: none; }
+
+/* Offline pack hide online-only Google Drive & pack download */
+body.is-offline-edition #btnDownloadAppPack,
+body.is-offline-edition #driveAccountStatus,
+body.is-offline-edition #btnDrivePicker,
+body.is-offline-edition #saveAllToDriveBtn,
+body.is-offline-edition .btn-drive,
+body.is-offline-edition #drivePickerModal {
+  display: none !important;
+}
+
+.tutorial-highlight-ring {
+  position: relative;
+  z-index: 45;
+  box-shadow: 0 0 0 4px #2563eb, 0 0 28px rgba(37, 99, 235, 0.5) !important;
+  transition: all 0.3s ease;
+  border-radius: 12px;
+}
 
 .container {
   width: 100%;
@@ -96,8 +114,10 @@ body.is-offline-edition .offline-indicator {
 .btn-header {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 6px 12px;
+  height: 32px;
+  padding: 0 12px;
   font-size: 0.8rem;
   font-weight: 600;
   border-radius: 6px;
@@ -107,6 +127,7 @@ body.is-offline-edition .offline-indicator {
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
+  box-sizing: border-box;
 }
 .btn-header:hover {
   background-color: var(--item-bg);
@@ -116,6 +137,8 @@ body.is-offline-edition .offline-indicator {
   background-color: var(--text-color);
   color: var(--card-bg);
   border: none;
+  height: 32px;
+  box-sizing: border-box;
 }
 .btn-install-app:hover { opacity: 0.9; }
 
@@ -156,9 +179,8 @@ body.is-offline-edition .offline-indicator {
   border-color: var(--accent-color);
 }
 .tab-scroll-btn:disabled {
-  opacity: 0.3;
-  cursor: default;
-  pointer-events: none;
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .tab-navigation {
@@ -170,6 +192,8 @@ body.is-offline-edition .offline-indicator {
   -ms-overflow-style: none; /* IE/Edge */
   scroll-behavior: smooth;
   flex: 1;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
 }
 .tab-navigation::-webkit-scrollbar {
   display: none; /* Chrome, Safari, Opera */
@@ -308,8 +332,24 @@ select.main-select, input.input-text {
 }
 .btn:hover { opacity: 0.9; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.btn-primary { background-color: var(--accent-color); color: #ffffff; margin-top: 12px; }
+.btn-primary { background-color: var(--accent-color); color: #ffffff; }
 .btn-primary:hover { background-color: var(--accent-hover); }
+
+/* Ensure equal height and alignment in button grids */
+.btn-group-equal {
+  display: grid;
+  align-items: stretch;
+}
+.btn-group-equal button,
+.btn-group-equal .btn {
+  margin: 0 !important;
+  height: 100% !important;
+  min-height: 52px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  text-align: center !important;
+}
 
 .spinner {
   width: 16px; height: 16px;

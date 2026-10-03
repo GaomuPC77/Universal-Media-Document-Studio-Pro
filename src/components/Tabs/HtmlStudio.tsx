@@ -7,28 +7,35 @@ import {
   Copy,
   Check,
   FileCode,
-  Sparkles,
   Smartphone,
   Tablet,
   Monitor,
   RefreshCw,
   FileDown,
   FileText,
-  Wand2,
   Trash2,
   BookOpen,
   FileEdit,
+  Maximize2,
+  Minimize2,
+  ExternalLink,
+  Layers,
+  Plus,
 } from 'lucide-react';
 import { saveProcessedFile } from '../../utils/historyDb';
 import { parseMarkdownToHtml } from '../../utils/markdownUtils';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
+import { FileItem } from '../../types';
 
 interface HtmlStudioProps {
   lang: 'ja' | 'en';
   sharedFile: File | null;
+  fileList?: FileItem[];
+  onResultReady?: (item: FileItem) => void;
   onSaveToDrive?: (name: string, blob: Blob) => void;
   onShowToast?: (msg: string) => void;
+  onAddFiles?: (files: File[]) => void;
 }
 
 const DEFAULT_SIMPLE_HTML = `<!DOCTYPE html>
@@ -51,16 +58,23 @@ const DEFAULT_SIMPLE_MD = `# タイトル
 export const HtmlStudio: React.FC<HtmlStudioProps> = ({
   lang,
   sharedFile,
+  fileList = [],
+  onResultReady,
   onSaveToDrive,
   onShowToast,
+  onAddFiles,
 }) => {
   const [docType, setDocType] = useState<'html' | 'markdown'>('html');
   const [codeContent, setCodeContent] = useState<string>(DEFAULT_SIMPLE_HTML);
   const [fileName, setFileName] = useState<string>('document.html');
+  const [selectedQueueFileId, setSelectedQueueFileId] = useState<string>('');
+  const [selectedQueueFileIds, setSelectedQueueFileIds] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<'split' | 'code' | 'preview'>('split');
   const [previewDevice, setPreviewDevice] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [isCopied, setIsCopied] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [pendingPromptFile, setPendingPromptFile] = useState<File | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -77,42 +91,35 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
     }
   };
 
-  // Load shared file if passed
-  useEffect(() => {
-    if (sharedFile) {
-      const ext = sharedFile.name.split('.').pop()?.toLowerCase();
-      if (['html', 'htm', 'md', 'markdown', 'txt'].includes(ext || '')) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const content = e.target?.result as string;
-          if (content) {
-            if (ext === 'md' || ext === 'markdown') {
-              setDocType('markdown');
-            } else {
-              setDocType('html');
-            }
-            setCodeContent(content);
-            setFileName(sharedFile.name);
-            if (onShowToast) {
-              onShowToast(
-                lang === 'ja'
-                  ? `「${sharedFile.name}」を読み込みました`
-                  : `Loaded "${sharedFile.name}"`
-              );
-            }
-          }
-        };
-        reader.readAsText(sharedFile);
+  // Open preview in a new browser tab
+  const handleOpenInNewTab = () => {
+    try {
+      const html = getRenderedHtml();
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      if (onShowToast) {
+        onShowToast(lang === 'ja' ? '新しいブラウザタブで全画面プレビューを開きました' : 'Opened preview in new tab');
       }
+    } catch (e) {
+      console.error('Failed to open preview in new tab:', e);
     }
-  }, [sharedFile, lang]);
+  };
 
-  const handleFileUpload = (file: File) => {
+  // Load a file into editor
+  const loadFileContentIntoEditor = (file: File) => {
     const ext = file.name.split('.').pop()?.toLowerCase();
     const reader = new FileReader();
     reader.onload = (e) => {
       const content = e.target?.result as string;
-      if (content) {
+      if (content !== undefined) {
         if (ext === 'md' || ext === 'markdown') {
           setDocType('markdown');
         } else {
@@ -127,6 +134,95 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
     };
     reader.readAsText(file);
   };
+
+  // Handle local upload - prompts user whether to add to global queue
+  const handleFileUpload = (file: File) => {
+    setPendingPromptFile(file);
+  };
+
+  const handleConfirmAddToQueue = () => {
+    if (!pendingPromptFile) return;
+    loadFileContentIntoEditor(pendingPromptFile);
+    if (onAddFiles) {
+      onAddFiles([pendingPromptFile]);
+    } else if (onResultReady) {
+      const ext = pendingPromptFile.name.split('.').pop()?.toLowerCase() || 'html';
+      onResultReady({
+        id: `file_${Date.now()}`,
+        name: pendingPromptFile.name,
+        size: pendingPromptFile.size,
+        type: pendingPromptFile.type,
+        format: ext as any,
+        targetFormat: ext === 'md' ? 'html' : 'pdf',
+        status: 'idle',
+        progress: 0,
+        file: pendingPromptFile,
+      });
+    }
+    if (onShowToast) {
+      onShowToast(lang === 'ja' ? '変換・処理ステータス（全体キュー）に追加しました' : 'Added to global status queue');
+    }
+    setPendingPromptFile(null);
+  };
+
+  const handleDismissAddToQueue = () => {
+    if (!pendingPromptFile) return;
+    loadFileContentIntoEditor(pendingPromptFile);
+    setPendingPromptFile(null);
+  };
+
+  // Handle single select from global queue
+  const handleSelectFromQueue = (fileId: string) => {
+    setSelectedQueueFileId(fileId);
+    if (!fileId) return;
+    const found = fileList.find((f) => f.id === fileId);
+    if (found && found.file) {
+      loadFileContentIntoEditor(found.file);
+    }
+  };
+
+  // Handle multiple select & combine from global queue
+  const handleToggleMultiSelectQueue = (fileId: string) => {
+    setSelectedQueueFileIds((prev) =>
+      prev.includes(fileId) ? prev.filter((id) => id !== fileId) : [...prev, fileId]
+    );
+  };
+
+  const handleCombineSelectedQueueFiles = async () => {
+    if (selectedQueueFileIds.length === 0) return;
+    const selectedItems = fileList.filter((f) => selectedQueueFileIds.includes(f.id) && f.file);
+    if (selectedItems.length === 0) return;
+
+    let combinedText = '';
+    for (const item of selectedItems) {
+      const txt = await item.file.text();
+      if (docType === 'markdown') {
+        combinedText += `\n\n---\n# ${item.name}\n\n${txt}`;
+      } else {
+        combinedText += `\n<!-- Section: ${item.name} -->\n<section style="margin-bottom:32px; border-bottom:1px dashed #ccc; padding-bottom:16px;">\n<h2>${item.name}</h2>\n${txt}\n</section>`;
+      }
+    }
+
+    if (docType === 'html' && !combinedText.includes('<!DOCTYPE html>')) {
+      combinedText = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Combined Documents</title></head><body>${combinedText}</body></html>`;
+    }
+
+    setCodeContent(combinedText.trim());
+    setFileName(`combined_${selectedItems.length}_files.${docType === 'markdown' ? 'md' : 'html'}`);
+    if (onShowToast) {
+      onShowToast(lang === 'ja' ? `${selectedItems.length} 件のファイルを結合して読み込みました` : `Combined ${selectedItems.length} files`);
+    }
+  };
+
+  // Load shared file if passed
+  useEffect(() => {
+    if (sharedFile) {
+      const ext = sharedFile.name.split('.').pop()?.toLowerCase();
+      if (['html', 'htm', 'md', 'markdown', 'txt'].includes(ext || '')) {
+        loadFileContentIntoEditor(sharedFile);
+      }
+    }
+  }, [sharedFile, lang]);
 
   const handleCopyCode = async () => {
     try {
@@ -176,14 +272,31 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
     URL.revokeObjectURL(url);
 
     // Save to history
+    const buffer = new TextEncoder().encode(codeContent).buffer as ArrayBuffer;
     saveProcessedFile(
       `${docType}_${Date.now()}`,
       fileName,
       downloadName,
-      new TextEncoder().encode(codeContent).buffer as ArrayBuffer,
+      buffer,
       docType,
       { characters: codeContent.length, lines: codeContent.split('\n').length }
     );
+
+    if (onResultReady) {
+      onResultReady({
+        id: `res_html_${Date.now()}`,
+        name: downloadName,
+        file: new File([blob], downloadName, { type: blob.type }),
+        size: blob.size,
+        type: blob.type,
+        format: docType as any,
+        targetFormat: docType as any,
+        status: 'done',
+        progress: 100,
+        resultBlob: blob,
+        resultName: downloadName,
+      });
+    }
 
     if (onShowToast) {
       onShowToast(
@@ -293,6 +406,22 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
         { source: docType }
       );
 
+      if (onResultReady) {
+        onResultReady({
+          id: `res_htmlpdf_${Date.now()}`,
+          name: pdfName,
+          file: new File([pdfBlob], pdfName, { type: 'application/pdf' }),
+          size: pdfBlob.size,
+          type: 'application/pdf',
+          format: 'pdf',
+          targetFormat: 'pdf',
+          status: 'done',
+          progress: 100,
+          resultBlob: pdfBlob,
+          resultName: pdfName,
+        });
+      }
+
       if (onShowToast) {
         onShowToast(lang === 'ja' ? 'PDFをエクスポートしました' : 'Exported to PDF successfully');
       }
@@ -344,7 +473,50 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
   const renderedHtml = getRenderedHtml();
 
   return (
-    <div className="w-full flex flex-col gap-4">
+    <div className={`w-full flex flex-col gap-4 ${isFullscreen ? 'fixed inset-0 z-50 bg-slate-100 dark:bg-slate-950 p-4 overflow-y-auto max-h-screen' : ''}`}>
+      {/* Local Upload -> Global Queue Prompt Dialog */}
+      {pendingPromptFile && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl flex flex-col gap-4 animate-fade-in">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-950/60 flex items-center justify-center text-blue-600 dark:text-blue-400 shrink-0">
+                <Layers className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-sm sm:text-base text-slate-800 dark:text-slate-100">
+                  {lang === 'ja' ? 'キューへの追加確認' : 'Add to Status Queue?'}
+                </h4>
+                <p className="text-xs text-slate-500 mt-0.5 line-clamp-1 font-mono">
+                  {pendingPromptFile.name} ({(pendingPromptFile.size / 1024).toFixed(1)} KB)
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+              {lang === 'ja'
+                ? 'アップロードしたファイルを「変換・処理ステータス（全体キュー）」にも追加しますか？追加すると、他のタブや一括ダウンロードでも利用できるようになります。'
+                : 'Would you like to add this uploaded file to the global Conversion/Processing Status queue as well?'}
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                onClick={handleDismissAddToQueue}
+                className="px-4 py-2 rounded-lg text-xs font-semibold border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100"
+              >
+                {lang === 'ja' ? 'このタブのみで使用' : 'Use in this tab only'}
+              </button>
+              <button
+                onClick={handleConfirmAddToQueue}
+                className="px-4 py-2 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-sm flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>{lang === 'ja' ? '全体キューにも追加' : 'Add to Global Queue'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Toolbar Card */}
       <div className="card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3">
@@ -387,7 +559,25 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
               title={lang === 'ja' ? 'ファイルを開く' : 'Open File'}
             >
               <FileEdit className="w-3.5 h-3.5 text-blue-600" />
-              <span>{lang === 'ja' ? 'ファイルを開く' : 'Open'}</span>
+              <span>{lang === 'ja' ? '開く' : 'Open'}</span>
+            </button>
+
+            <button
+              onClick={handleOpenInNewTab}
+              className="btn-header"
+              title={lang === 'ja' ? '別のブラウザタブで全画面プレビュー' : 'Preview in New Tab'}
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
+              <span>{lang === 'ja' ? '別タブ表示' : 'New Tab'}</span>
+            </button>
+
+            <button
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              className="btn-header"
+              title={isFullscreen ? (lang === 'ja' ? '全画面解除' : 'Exit Fullscreen') : (lang === 'ja' ? '全画面表示' : 'Fullscreen')}
+            >
+              {isFullscreen ? <Minimize2 className="w-3.5 h-3.5 text-indigo-600" /> : <Maximize2 className="w-3.5 h-3.5 text-indigo-600" />}
+              <span>{isFullscreen ? (lang === 'ja' ? '縮小' : 'Exit') : (lang === 'ja' ? '全画面' : 'Expand')}</span>
             </button>
 
             <button
@@ -395,7 +585,7 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
               className="btn-header"
               title={lang === 'ja' ? 'コードを整形' : 'Format Code'}
             >
-              <Wand2 className="w-3.5 h-3.5 text-purple-600" />
+              <FileCode className="w-3.5 h-3.5 text-blue-600" />
               <span>{lang === 'ja' ? '整形' : 'Format'}</span>
             </button>
 
@@ -418,6 +608,67 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Global Queue File Selection & Multi-select Bar */}
+        {fileList.length > 0 && (
+          <div className="mt-3 p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-col gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 mb-0">
+                <Layers className="w-3.5 h-3.5 text-blue-600" />
+                <span>{lang === 'ja' ? '読み込み済みファイルから選択して開く:' : 'Select from Loaded Queue:'}</span>
+              </label>
+
+              {selectedQueueFileIds.length > 1 && (
+                <button
+                  onClick={handleCombineSelectedQueueFiles}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-md bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1 shadow-xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{lang === 'ja' ? `${selectedQueueFileIds.length} 件を結合して読み込む` : `Combine ${selectedQueueFileIds.length} files`}</span>
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {/* Single Select Dropdown */}
+              <select
+                value={selectedQueueFileId}
+                onChange={(e) => handleSelectFromQueue(e.target.value)}
+                className="main-select text-xs mb-0"
+              >
+                <option value="">{lang === 'ja' ? '-- 単一ファイルを選択して読み込み --' : '-- Select Single File --'}</option>
+                {fileList.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name} (.{f.format})
+                  </option>
+                ))}
+              </select>
+
+              {/* Multi-select Chips list */}
+              <div className="flex items-center gap-1.5 overflow-x-auto py-1 text-xs">
+                <span className="text-[11px] text-slate-500 whitespace-nowrap font-medium mr-1">
+                  {lang === 'ja' ? '複数選択:' : 'Multi:'}
+                </span>
+                {fileList.map((f) => {
+                  const isSel = selectedQueueFileIds.includes(f.id);
+                  return (
+                    <button
+                      key={f.id}
+                      onClick={() => handleToggleMultiSelectQueue(f.id)}
+                      className={`px-2 py-0.5 rounded-md border text-[11px] font-medium transition-colors whitespace-nowrap ${
+                        isSel
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-blue-400'
+                      }`}
+                    >
+                      {f.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Mode Selector & View Controls */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
@@ -556,7 +807,7 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
               onChange={(e) => setCodeContent(e.target.value)}
               placeholder={docType === 'markdown' ? '# タイトル\n\nここに記述...' : '<html>...</html>'}
               spellCheck={false}
-              className="w-full h-[460px] p-4 font-mono text-xs leading-relaxed bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 resize-none focus:outline-hidden"
+              className={`w-full ${isFullscreen ? 'h-[620px]' : 'h-[460px]'} p-4 font-mono text-xs leading-relaxed bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 resize-none focus:outline-hidden`}
               style={{ tabSize: 2 }}
             />
             {/* Quick Snippets Bar */}
@@ -656,7 +907,7 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
               </button>
             </div>
 
-            <div className="w-full h-[460px] bg-slate-100 dark:bg-slate-950 flex items-center justify-center p-2 overflow-auto">
+            <div className={`w-full ${isFullscreen ? 'h-[620px]' : 'h-[460px]'} bg-slate-100 dark:bg-slate-950 flex items-center justify-center p-2 overflow-auto`}>
               <div
                 style={{
                   width:
@@ -688,7 +939,7 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
         )}
       </div>
 
-      {/* Export & Conversion Card */}
+      {/* Export & Conversion Card - Uniform button heights without vertical offsets */}
       <div className="card">
         <div className="section-title">
           <span className="flex items-center gap-2">
@@ -697,13 +948,13 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
           </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 mt-2">
+        <div className="btn-group-equal grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 mt-2 items-stretch">
           {/* 1. Download HTML / MD */}
           <button
             onClick={handleDownloadFile}
-            className="btn btn-primary flex items-center justify-center gap-2 py-3"
+            className="btn btn-primary h-full min-h-[52px] m-0 py-2.5 px-4 flex items-center justify-center gap-2 text-center"
           >
-            <Download className="w-4 h-4" />
+            <Download className="w-4 h-4 shrink-0" />
             <span>
               {docType === 'markdown'
                 ? lang === 'ja'
@@ -719,18 +970,18 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
           <button
             onClick={handleExportPdf}
             disabled={isExportingPdf}
-            className="btn flex items-center justify-center gap-2 py-3 bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
+            className="btn h-full min-h-[52px] m-0 py-2.5 px-4 flex items-center justify-center gap-2 text-center bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white disabled:opacity-50"
           >
-            {isExportingPdf ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+            {isExportingPdf ? <RefreshCw className="w-4 h-4 animate-spin shrink-0" /> : <FileDown className="w-4 h-4 shrink-0" />}
             <span>{lang === 'ja' ? 'PDF形式でエクスポート (.pdf)' : 'Export as High-Res PDF'}</span>
           </button>
 
           {/* 3. Extract Text */}
           <button
             onClick={handleExtractText}
-            className="btn flex items-center justify-center gap-2 py-3 bg-slate-700 hover:bg-slate-800 text-white"
+            className="btn h-full min-h-[52px] m-0 py-2.5 px-4 flex items-center justify-center gap-2 text-center bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white"
           >
-            <FileText className="w-4 h-4" />
+            <FileText className="w-4 h-4 shrink-0" />
             <span>{lang === 'ja' ? 'プレーンテキスト保存 (.txt)' : 'Save Plain Text (.txt)'}</span>
           </button>
         </div>

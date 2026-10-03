@@ -2,13 +2,14 @@ import * as XLSX from 'xlsx';
 import mammoth from 'mammoth';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
 import { jsPDF } from 'jspdf';
-import { extractPdfText } from './pdfUtils';
+import PptxGenJS from 'pptxgenjs';
+import { extractPdfText, extractPdfTableRows, convertPdfToImages } from './pdfUtils';
 
 /**
  * Parse DOCX to HTML for preview
  */
-export async function docxToHtml(file: File | ArrayBuffer): Promise<string> {
-  const arrayBuffer = file instanceof File ? await file.arrayBuffer() : file;
+export async function docxToHtml(file: File | ArrayBuffer | Blob): Promise<string> {
+  const arrayBuffer = file instanceof Blob ? await file.arrayBuffer() : file;
   const result = await mammoth.convertToHtml({ arrayBuffer });
   return result.value;
 }
@@ -16,8 +17,8 @@ export async function docxToHtml(file: File | ArrayBuffer): Promise<string> {
 /**
  * Parse DOCX to Plain Text
  */
-export async function docxToText(file: File | ArrayBuffer): Promise<string> {
-  const arrayBuffer = file instanceof File ? await file.arrayBuffer() : file;
+export async function docxToText(file: File | ArrayBuffer | Blob): Promise<string> {
+  const arrayBuffer = file instanceof Blob ? await file.arrayBuffer() : file;
   const result = await mammoth.extractRawText({ arrayBuffer });
   return result.value;
 }
@@ -66,7 +67,7 @@ export async function createDocxFromText(
           spacing: { after: 60 },
         })
       );
-    } else {
+    } else if (trimmed.length > 0) {
       children.push(
         new Paragraph({
           children: [new TextRun(line)],
@@ -78,7 +79,7 @@ export async function createDocxFromText(
 
   const doc = new Document({
     title: options?.title || 'Document',
-    creator: options?.author || 'Universal Document Studio',
+    creator: options?.author || 'Document Studio',
     sections: [
       {
         properties: {},
@@ -91,12 +92,97 @@ export async function createDocxFromText(
 }
 
 /**
+ * Convert PDF to Word (.docx) format
+ */
+export async function pdfToDocx(
+  file: File | ArrayBuffer | Blob,
+  options?: { title?: string }
+): Promise<Blob> {
+  const text = await extractPdfText(file);
+  const title = options?.title || 'Converted Document';
+  if (!text || text.trim().length === 0) {
+    // If no selectable text, create doc with notice
+    return await createDocxFromText(`# ${title}\n\n(PDFから抽出されたテキストはありません)`, { title });
+  }
+  return await createDocxFromText(text, { title });
+}
+
+/**
+ * Convert PDF to Excel (.xlsx) format
+ */
+export async function pdfToXlsx(
+  file: File | ArrayBuffer | Blob,
+  sheetName: string = 'Sheet1'
+): Promise<Blob> {
+  const rows = await extractPdfTableRows(file);
+  const matrix = rows.length > 0 ? rows : [['抽出データなし']];
+  return exportSpreadsheet(matrix, 'xlsx', sheetName);
+}
+
+/**
+ * Convert PDF to PowerPoint (.pptx) format
+ */
+export async function pdfToPptx(
+  file: File | ArrayBuffer | Blob,
+  options?: { title?: string }
+): Promise<Blob> {
+  // @ts-ignore
+  const pptx = new (PptxGenJS.default || PptxGenJS)();
+  pptx.title = options?.title || 'Converted Presentation';
+  pptx.layout = 'LAYOUT_16x9';
+
+  const pageImages = await convertPdfToImages(file, { format: 'png', dpi: 150 });
+
+  if (pageImages.length === 0) {
+    const slide = pptx.addSlide();
+    slide.addText(options?.title || 'Converted Presentation', {
+      x: 1,
+      y: 1,
+      w: 8,
+      h: 2,
+      fontSize: 24,
+      bold: true,
+      color: '1E293B',
+    });
+  } else {
+    for (const page of pageImages) {
+      const slide = pptx.addSlide();
+      const reader = new FileReader();
+      const dataUrl = await new Promise<string>((resolve) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(page.blob);
+      });
+      slide.addImage({
+        data: dataUrl,
+        x: 0.5,
+        y: 0.4,
+        w: 9.0,
+        h: 5.0,
+        sizing: { type: 'contain', w: 9.0, h: 5.0 },
+      });
+    }
+  }
+
+  const out = await pptx.write({ outputType: 'blob' });
+  return out as Blob;
+}
+
+/**
+ * Convert PDF to CSV format
+ */
+export async function pdfToCsv(file: File | ArrayBuffer | Blob): Promise<Blob> {
+  const rows = await extractPdfTableRows(file);
+  const matrix = rows.length > 0 ? rows : [['']];
+  return exportSpreadsheet(matrix, 'csv');
+}
+
+/**
  * Parse Excel / CSV file into Sheet data matrix
  */
 export async function parseSpreadsheet(
-  file: File | ArrayBuffer
+  file: File | ArrayBuffer | Blob
 ): Promise<{ sheetNames: string[]; sheets: { [name: string]: any[][] } }> {
-  const arrayBuffer = file instanceof File ? await file.arrayBuffer() : file;
+  const arrayBuffer = file instanceof Blob ? await file.arrayBuffer() : file;
   const workbook = XLSX.read(arrayBuffer, { type: 'array' });
   const sheets: { [name: string]: any[][] } = {};
 
@@ -113,7 +199,7 @@ export async function parseSpreadsheet(
 }
 
 /**
- * Export 2D data matrix or JSON to XLSX, CSV, JSON, HTML Table, or Markdown Table
+ * Export 2D data matrix or JSON to XLSX, CSV, TSV, JSON, HTML Table, or Markdown Table
  */
 export function exportSpreadsheet(
   data: any[][],
@@ -279,7 +365,7 @@ export async function spreadsheetToPdf(
     for (let c = 0; c < colCount; c++) {
       const val = row[c] !== undefined && row[c] !== null ? String(row[c]) : '';
       const cellX = margin + c * colWidth;
-      
+
       // Cell borders
       doc.setDrawColor(220, 225, 230);
       doc.rect(cellX, startY - 14, colWidth, rowHeight);

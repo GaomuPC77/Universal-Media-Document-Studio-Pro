@@ -12,13 +12,15 @@ import { DiffSuite } from './components/Tabs/DiffSuite';
 import { ZipSuite } from './components/Tabs/ZipSuite';
 import { HistoryTab } from './components/Tabs/HistoryTab';
 import { HtmlStudio } from './components/Tabs/HtmlStudio';
+import { StatusQueueCard } from './components/StatusQueueCard';
 import { FilePreviewModal } from './components/Modals/FilePreviewModal';
 import { DrivePickerModal } from './components/Modals/DrivePickerModal';
 import { HistoryModal } from './components/Modals/HistoryModal';
 import { downloadOfflinePack } from './utils/offlinePack';
 import { uploadFileToDrive, getStoredToken } from './utils/googleDrive';
+import { savePendingFile, getPendingFiles, deletePendingFile, clearEntireAppCache } from './utils/historyDb';
 import { FileItem, DocumentFormat } from './types';
-import { UploadCloud } from 'lucide-react';
+import { UploadCloud, CheckCircle2, ChevronRight, ChevronLeft, X, Sparkles } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('converter');
@@ -38,6 +40,8 @@ export default function App() {
   const [isFirstLaunchOpen, setIsFirstLaunchOpen] = useState(false);
   const [isAgreedTerms, setIsAgreedTerms] = useState(false);
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
+  const [currentTutorialStep, setCurrentTutorialStep] = useState(0);
+  const [isOfflineGuideOpen, setIsOfflineGuideOpen] = useState(false);
   const [isTermsOpen, setIsTermsOpen] = useState(false);
   const [isPrivacyOpen, setIsPrivacyOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -53,6 +57,34 @@ export default function App() {
     if (agreed !== 'true') {
       setIsFirstLaunchOpen(true);
     }
+
+    // Restore pending files & session across reloads
+    getPendingFiles().then((stored) => {
+      if (stored && stored.length > 0) {
+        const reconstructed: FileItem[] = stored.map((item) => {
+          const fileObj = new File([item.data], item.name, { type: item.type || 'application/octet-stream' });
+          const format = (item.format || getFormatFromExt(item.name)) as DocumentFormat;
+          return {
+            id: item.id,
+            name: item.name,
+            size: item.size,
+            type: item.type,
+            format,
+            targetFormat: (item.targetFormat || (format === 'pdf' ? 'docx' : 'pdf')) as DocumentFormat,
+            status: 'idle',
+            progress: 0,
+            file: fileObj,
+            previewUrl: ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif', 'ico'].includes(format)
+              ? URL.createObjectURL(fileObj)
+              : undefined,
+          };
+        });
+        setFileList(reconstructed);
+        if (reconstructed.length > 0) {
+          setActiveSharedFile(reconstructed[0].file);
+        }
+      }
+    });
   }, []);
 
   // Sync theme to root element & data-theme attribute
@@ -74,6 +106,84 @@ export default function App() {
     }
   }, [theme]);
 
+  const tutorialSteps = [
+    {
+      targetId: 'commonUploadCard',
+      titleJa: '1. 処理するファイルの読み込み・追加',
+      titleEn: '1. Load & Add Files',
+      descJa: 'ファイル、フォルダ、またはGoogle Driveから処理したいファイルを追加します。ドラッグ＆ドロップにも対応しています。',
+      descEn: 'Add files, folders, or import from Google Drive here. Drag & drop is fully supported.',
+    },
+    {
+      targetId: 'tabNavContainer',
+      titleJa: '2. 処理ツールの選択（機能タブ）',
+      titleEn: '2. Select Processing Tool',
+      descJa: '「変換」「PDF編集」「Office変換」「HTML・Markdown」「電子印鑑」「OCR」「差分比較」「ZIP」「履歴」など、目的の処理タブを選択して切り替えます。左右の矢印ボタンやマウスホイール・ドラッグで横スクロールできます。',
+      descEn: 'Switch between suites like Universal Converter, PDF Toolkit, Office Suite, HTML/Markdown Studio, Sign & Stamp, OCR, Diff Studio, ZIP, and History.',
+    },
+    {
+      targetId: 'mainTabContentArea',
+      titleJa: '3. 変換・編集の各種設定と実行',
+      titleEn: '3. Configure & Execute',
+      descJa: '選択した処理タブで、変換先のフォーマットやオプション、編集内容を設定して処理を実行します。タブを切り替えても作業内容は保持されます。',
+      descEn: 'Configure output formats, options, and editing parameters. Your progress is preserved even when switching between tabs.',
+    },
+    {
+      targetId: 'statusQueueSection',
+      titleJa: '4. 変換・処理ステータス（進捗・保存・ZIP）',
+      titleEn: '4. Status Queue & Downloads',
+      descJa: '処理のリアルタイム進捗や完了ファイルの一覧がここに集約されます。個別保存、Google Drive保存、一括ZIPダウンロードが行えます。',
+      descEn: 'View real-time progress and completed files. Download individually, save to Google Drive, or batch download as a ZIP archive.',
+    },
+    {
+      targetId: 'mainAppContainer',
+      titleJa: '5. オフラインパック ＆ 各種機能',
+      titleEn: '5. Offline Pack & Utilities',
+      descJa: '「オフライン用パックを取得」をクリックすると、ネット接続が不要な完全スタンドアロン版HTMLと起動用バッチファイルをダウンロードできます。言語やテーマの切り替えもここから行えます。',
+      descEn: 'Click "Offline Pack" to download a 100% standalone offline edition. Switch languages and themes anytime.',
+    },
+  ];
+
+  // Auto-scroll and highlight target element on tutorial step change
+  useEffect(() => {
+    if (isTutorialOpen) {
+      const step = tutorialSteps[currentTutorialStep];
+      if (step) {
+        const timer = setTimeout(() => {
+          const el = document.getElementById(step.targetId);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            document.querySelectorAll('.tutorial-highlight-ring').forEach((node) => node.classList.remove('tutorial-highlight-ring'));
+            el.classList.add('tutorial-highlight-ring');
+          }
+        }, 120);
+        return () => clearTimeout(timer);
+      }
+    } else {
+      document.querySelectorAll('.tutorial-highlight-ring').forEach((node) => node.classList.remove('tutorial-highlight-ring'));
+    }
+  }, [isTutorialOpen, currentTutorialStep]);
+
+  const handleNextTutorial = () => {
+    if (currentTutorialStep < tutorialSteps.length - 1) {
+      setCurrentTutorialStep((prev) => prev + 1);
+    } else {
+      handleCloseTutorial();
+    }
+  };
+
+  const handlePrevTutorial = () => {
+    if (currentTutorialStep > 0) {
+      setCurrentTutorialStep((prev) => prev - 1);
+    }
+  };
+
+  const handleCloseTutorial = () => {
+    setIsTutorialOpen(false);
+    setCurrentTutorialStep(0);
+    document.querySelectorAll('.tutorial-highlight-ring').forEach((node) => node.classList.remove('tutorial-highlight-ring'));
+  };
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
@@ -88,8 +198,13 @@ export default function App() {
 
   const handleDownloadOfflinePack = async () => {
     showToast(lang === 'ja' ? 'オフラインHTMLを作成中...' : 'Generating offline single file HTML...');
-    await downloadOfflinePack();
-    showToast(lang === 'ja' ? 'オフラインHTMLをダウンロードしました' : 'Offline Pack Downloaded!');
+    try {
+      await downloadOfflinePack();
+      showToast(lang === 'ja' ? 'オフライン用パックを取得しました' : 'Offline Pack Downloaded!');
+      setIsOfflineGuideOpen(true);
+    } catch (e) {
+      showToast(lang === 'ja' ? 'オフラインパックの取得に失敗しました' : 'Failed to generate offline pack');
+    }
   };
 
   const handleShare = async () => {
@@ -129,28 +244,48 @@ export default function App() {
     return 'txt';
   };
 
-  const handleFilesAdded = (files: FileList | File[]) => {
+  const handleFilesAdded = async (files: FileList | File[]) => {
     if (!files || files.length === 0) return;
     const fileArray = Array.from(files);
     setActiveSharedFile(fileArray[0]);
 
-    const newItems: FileItem[] = fileArray.map((file) => {
+    const newItems: FileItem[] = [];
+    for (const file of fileArray) {
       const format = getFormatFromExt(file.name);
-      return {
-        id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      const targetFormat = format === 'pdf' ? 'docx' : 'pdf';
+      const id = `file_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+      newItems.push({
+        id,
         name: file.name,
         size: file.size,
         type: file.type,
         format,
-        targetFormat: format === 'pdf' ? 'docx' : 'pdf',
+        targetFormat,
         status: 'idle',
         progress: 0,
         file,
         previewUrl: ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif', 'ico'].includes(format)
           ? URL.createObjectURL(file)
           : undefined,
-      };
-    });
+      });
+
+      // Persist pending file to IndexedDB for session recovery
+      try {
+        const buf = await file.arrayBuffer();
+        await savePendingFile({
+          id,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          format,
+          targetFormat,
+          data: buf,
+          date: Date.now(),
+        });
+      } catch (err) {
+        console.warn('Failed to persist pending file:', err);
+      }
+    }
 
     setFileList((prev) => {
       const filtered = newItems.filter((item) => !prev.some((p) => p.name === item.name && p.size === item.size));
@@ -162,6 +297,18 @@ export default function App() {
         ? `📄 ${fileArray.length} 件のファイルを読み込みました。下の処理を選択して変換できます。`
         : `📄 Loaded ${fileArray.length} file(s). Select a tab below to process.`
     );
+  };
+
+  const handleResultReady = (item: FileItem) => {
+    setFileList((prev) => {
+      const existingIdx = prev.findIndex((p) => p.name === item.name || p.id === item.id);
+      if (existingIdx !== -1) {
+        const next = [...prev];
+        next[existingIdx] = item;
+        return next;
+      }
+      return [item, ...prev];
+    });
   };
 
   // Rock-solid Global Window Drag & Drop Listeners (Prevents overlay stuck bug)
@@ -291,23 +438,25 @@ export default function App() {
         />
 
         {/* 1. Common File Upload Card (At the top of the workflow) */}
-        <CommonUploadCard
-          lang={lang}
-          onFilesSelected={handleFilesAdded}
-          onOpenDrivePicker={() => setIsDriveModalOpen(true)}
-          onShowToast={showToast}
-        />
+        <div id="commonUploadCard">
+          <CommonUploadCard
+            lang={lang}
+            onFilesSelected={handleFilesAdded}
+            onOpenDrivePicker={() => setIsDriveModalOpen(true)}
+            onShowToast={showToast}
+          />
+        </div>
 
-        {/* Tab Navigation (Directly underneath Card 1 with Left & Right scroll buttons) */}
+        {/* Tab Navigation (Directly underneath with Left & Right scroll buttons) */}
         <TabNavigation
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           lang={lang}
         />
 
-        {/* Active Tab Contents */}
-        <main className="w-full">
-          {activeTab === 'converter' && (
+        {/* Tab Contents - Kept mounted persistently so state and inputs are never lost */}
+        <main className="w-full" id="mainTabContentArea">
+          <div style={{ display: activeTab === 'converter' ? 'block' : 'none' }}>
             <UniversalConverter
               lang={lang}
               fileList={fileList}
@@ -318,18 +467,48 @@ export default function App() {
               onOpenDrivePicker={() => setIsDriveModalOpen(true)}
               onOpenHistory={() => setIsHistoryModalOpen(true)}
             />
-          )}
+          </div>
 
-          {activeTab === 'pdf-suite' && <PdfSuite lang={lang} sharedFile={activeSharedFile} />}
+          <div style={{ display: activeTab === 'pdf-suite' ? 'block' : 'none' }}>
+            <PdfSuite
+              lang={lang}
+              sharedFile={activeSharedFile}
+              fileList={fileList}
+              onResultReady={handleResultReady}
+              onAddFiles={handleFilesAdded}
+              onShowToast={showToast}
+            />
+          </div>
 
-          {activeTab === 'pdf-image' && <PdfImageSuite lang={lang} sharedFile={activeSharedFile} />}
+          <div style={{ display: activeTab === 'pdf-image' ? 'block' : 'none' }}>
+            <PdfImageSuite
+              lang={lang}
+              sharedFile={activeSharedFile}
+              fileList={fileList}
+              onResultReady={handleResultReady}
+              onAddFiles={handleFilesAdded}
+              onShowToast={showToast}
+            />
+          </div>
 
-          {activeTab === 'office-suite' && <OfficeSuite lang={lang} sharedFile={activeSharedFile} />}
+          <div style={{ display: activeTab === 'office-suite' ? 'block' : 'none' }}>
+            <OfficeSuite
+              lang={lang}
+              sharedFile={activeSharedFile}
+              fileList={fileList}
+              onResultReady={handleResultReady}
+              onAddFiles={handleFilesAdded}
+              onShowToast={showToast}
+            />
+          </div>
 
-          {activeTab === 'html-studio' && (
+          <div style={{ display: activeTab === 'html-studio' ? 'block' : 'none' }}>
             <HtmlStudio
               lang={lang}
               sharedFile={activeSharedFile}
+              fileList={fileList}
+              onResultReady={handleResultReady}
+              onAddFiles={handleFilesAdded}
               onSaveToDrive={(name, blob) =>
                 handleSaveItemToDrive({
                   id: String(Date.now()),
@@ -347,17 +526,52 @@ export default function App() {
               }
               onShowToast={showToast}
             />
-          )}
+          </div>
 
-          {activeTab === 'sign-stamp' && <SignAndStamp lang={lang} sharedFile={activeSharedFile} />}
+          <div style={{ display: activeTab === 'sign-stamp' ? 'block' : 'none' }}>
+            <SignAndStamp
+              lang={lang}
+              sharedFile={activeSharedFile}
+              fileList={fileList}
+              onResultReady={handleResultReady}
+              onAddFiles={handleFilesAdded}
+              onShowToast={showToast}
+            />
+          </div>
 
-          {activeTab === 'ocr-qr' && <OcrSuite lang={lang} sharedFile={activeSharedFile} />}
+          <div style={{ display: activeTab === 'ocr-qr' ? 'block' : 'none' }}>
+            <OcrSuite
+              lang={lang}
+              sharedFile={activeSharedFile}
+              fileList={fileList}
+              onResultReady={handleResultReady}
+              onAddFiles={handleFilesAdded}
+              onShowToast={showToast}
+            />
+          </div>
 
-          {activeTab === 'diff-suite' && <DiffSuite lang={lang} sharedFile={activeSharedFile} />}
+          <div style={{ display: activeTab === 'diff-suite' ? 'block' : 'none' }}>
+            <DiffSuite
+              lang={lang}
+              sharedFile={activeSharedFile}
+              fileList={fileList}
+              onResultReady={handleResultReady}
+              onAddFiles={handleFilesAdded}
+              onShowToast={showToast}
+            />
+          </div>
 
-          {activeTab === 'zip-suite' && <ZipSuite lang={lang} />}
+          <div style={{ display: activeTab === 'zip-suite' ? 'block' : 'none' }}>
+            <ZipSuite
+              lang={lang}
+              fileList={fileList}
+              onResultReady={handleResultReady}
+              onAddFiles={handleFilesAdded}
+              onShowToast={showToast}
+            />
+          </div>
 
-          {activeTab === 'history' && (
+          <div style={{ display: activeTab === 'history' ? 'block' : 'none' }}>
             <HistoryTab
               lang={lang}
               onPreview={(name, blob, format) => {
@@ -380,11 +594,26 @@ export default function App() {
               }}
               onShowToast={showToast}
             />
-          )}
+          </div>
         </main>
 
+        {/* 2. Global Conversion & Processing Status Queue (Located directly below processing area and above Features) */}
+        <StatusQueueCard
+          lang={lang}
+          fileList={fileList}
+          setFileList={setFileList}
+          onPreview={(item) => setPreviewItem(item)}
+          onSaveToDrive={handleSaveItemToDrive}
+          onOpenDrivePicker={() => setIsDriveModalOpen(true)}
+          onShowToast={showToast}
+          onClearCache={() => {
+            setFileList([]);
+            setActiveSharedFile(null);
+          }}
+        />
+
         {/* Bottom Features, Environment, How-To, and FAQ Section conforming to Reference HTML */}
-        <div className="card">
+        <div className="card" id="featuresSection">
           <div className="info-card-title">{lang === 'ja' ? '本ツールの特徴' : 'Tool Features'}</div>
           <div className="info-box-grid">
             <div className="info-sub-box">
@@ -646,13 +875,85 @@ export default function App() {
         </div>
       )}
 
-      {/* Tutorial Modal */}
+      {/* Interactive Step-by-Step Tutorial Tour (Auto-scrolls & focuses on target elements, skippable at any time) */}
       {isTutorialOpen && (
-        <div className="modal-overlay" style={{ display: 'flex' }} onClick={(e) => { if (e.target === e.currentTarget) setIsTutorialOpen(false); }}>
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-lg w-[94vw] bg-white dark:bg-slate-900 border-2 border-blue-500 shadow-2xl rounded-2xl p-5 animate-fade-in flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800">
+                {lang === 'ja' ? `手順 ${currentTutorialStep + 1} / ${tutorialSteps.length}` : `Step ${currentTutorialStep + 1} / ${tutorialSteps.length}`}
+              </span>
+              <h4 className="font-bold text-sm sm:text-base text-slate-800 dark:text-slate-100">
+                {lang === 'ja' ? tutorialSteps[currentTutorialStep].titleJa : tutorialSteps[currentTutorialStep].titleEn}
+              </h4>
+            </div>
+            <button
+              onClick={handleCloseTutorial}
+              className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 font-semibold px-2 py-1 rounded-md"
+            >
+              {lang === 'ja' ? 'スキップ ✕' : 'Skip ✕'}
+            </button>
+          </div>
+
+          <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            {lang === 'ja' ? tutorialSteps[currentTutorialStep].descJa : tutorialSteps[currentTutorialStep].descEn}
+          </p>
+
+          <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
+            {/* Clickable Step Indicator Dots */}
+            <div className="flex items-center gap-1.5">
+              {tutorialSteps.map((_, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setCurrentTutorialStep(idx)}
+                  className={`w-2.5 h-2.5 rounded-full transition-all ${
+                    currentTutorialStep === idx
+                      ? 'bg-blue-600 w-5'
+                      : 'bg-slate-300 dark:bg-slate-700 hover:bg-slate-400'
+                  }`}
+                  title={`${lang === 'ja' ? '手順' : 'Step'} ${idx + 1}`}
+                  aria-label={`Jump to Step ${idx + 1}`}
+                />
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleCloseTutorial}
+                className="px-2.5 py-1 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 font-semibold"
+              >
+                {lang === 'ja' ? 'スキップ' : 'Skip'}
+              </button>
+              {currentTutorialStep > 0 && (
+                <button
+                  onClick={handlePrevTutorial}
+                  className="btn-sm flex items-center gap-1"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>{lang === 'ja' ? '前へ' : 'Back'}</span>
+                </button>
+              )}
+              <button
+                onClick={handleNextTutorial}
+                className="btn-sm btn-success flex items-center gap-1"
+              >
+                <span>{currentTutorialStep === tutorialSteps.length - 1 ? (lang === 'ja' ? '完了して利用開始' : 'Finish & Start') : (lang === 'ja' ? '次へ' : 'Next')}</span>
+                {currentTutorialStep < tutorialSteps.length - 1 && <ChevronRight className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Offline Ready Guidance Modal (Matching Reference HTML) */}
+      {isOfflineGuideOpen && (
+        <div className="modal-overlay" style={{ display: 'flex' }}>
           <div className="modal-box">
             <div className="modal-header">
-              <div className="modal-title">{lang === 'ja' ? '使い方ガイド（チュートリアル）' : 'Getting Started Guide'}</div>
-              <button className="modal-close" onClick={() => setIsTutorialOpen(false)} aria-label="閉じる">
+              <div className="modal-title font-bold text-amber-600 dark:text-amber-400 flex items-center gap-2">
+                <span>{lang === 'ja' ? 'オフライン用ファイルの準備完了' : 'Offline Files Ready'}</span>
+              </div>
+              <button className="modal-close" onClick={() => setIsOfflineGuideOpen(false)} aria-label="閉じる">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="18" y1="6" x2="6" y2="18"></line>
                   <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -660,17 +961,22 @@ export default function App() {
               </button>
             </div>
             <div className="modal-body">
-              <ol style={{ paddingLeft: '18px', lineHeight: 1.7 }}>
-                <li><strong>{lang === 'ja' ? '1. ファイルの読み込み:' : '1. Add Files:'}</strong> {lang === 'ja' ? '最上部の「1. 処理するファイルの読み込み・追加」から「ファイルを選択」「フォルダを選択」または「Google Driveから読込」でメディアやドキュメントを追加します。' : 'Add files via Section 1 above (File select, folder select, or Google Drive import).'}</li>
-                <li><strong>{lang === 'ja' ? '2. 処理タブの選択:' : '2. Select Tool:'}</strong> {lang === 'ja' ? 'タブバーから「一括変換」「PDF編集」「Office変換」「HTML・Markdown」「電子印鑑」「OCR」「差分比較」「ZIP」「履歴」など目的のツールを選択します。' : 'Choose your desired tool from the tab bar (Convert, PDF Toolkit, Office Suite, HTML & Markdown, Sign & Stamp, OCR, Diff Studio, ZIP, History, etc.).'}</li>
-                <li><strong>{lang === 'ja' ? '3. 変換とリアルタイム進捗:' : '3. Convert:'}</strong> {lang === 'ja' ? '出力形式を設定して開始ボタンを押すと、リアルタイムに進捗パーセントが表示されます。' : 'Select target format and start conversion to view live progress.'}</li>
-                <li><strong>{lang === 'ja' ? '4. HTML・Markdown プレビュー & 編集:' : '4. HTML & Markdown:'}</strong> {lang === 'ja' ? 'HTMLやMarkdownのリアルタイム編集・安全なサンドボックス表示・PDF書き出し・テキスト抽出を行えます。' : 'Live HTML & Markdown editing, instant rendering, and high-res PDF export.'}</li>
-                <li><strong>{lang === 'ja' ? '5. 保存とGoogle Drive同期:' : '5. Save & Drive:'}</strong> {lang === 'ja' ? '完了後、個別保存、Google Driveへ直接同期、または「一括ZIPダウンロード」が可能です。' : 'Download individually, save to Google Drive, or batch download as a ZIP package.'}</li>
-                <li><strong>{lang === 'ja' ? '6. 処理履歴の確認:' : '6. History:'}</strong> {lang === 'ja' ? '過去に変換・作成したファイルは、タブバー右端の「履歴」タブからいつでも再閲覧・再ダウンロード・再編集できます。' : 'Access previous processed files anytime via the rightmost "History" tab in the navigation bar.'}</li>
-              </ol>
+              <p style={{ marginBottom: '10px', fontSize: '0.88rem', lineHeight: '1.6' }}>
+                {lang === 'ja'
+                  ? 'ダウンロードしたHTMLファイルと起動用バッチファイルを同じフォルダ（デスクトップなど）に置き、アプリを起動する.bat をダブルクリックして起動してください。'
+                  : 'Place both downloaded files in the same folder and double-click "アプリを起動する.bat" to launch.'}
+              </p>
+              <div className="alert-box-warning" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <strong>{lang === 'ja' ? 'Windows Smart App Control 等の警告が出た場合:' : 'If Windows Warning Appears:'}</strong>
+                <span>
+                  {lang === 'ja'
+                    ? 'バッチファイル実行時に警告が表示された場合は、「詳細情報」をクリックし「実行」を選択してご対応ください。'
+                    : 'If a warning appears upon running the batch launcher, click "More info" and select "Run anyway".'}
+                </span>
+              </div>
             </div>
             <div className="modal-footer">
-              <button className="btn-sm btn-success" onClick={() => setIsTutorialOpen(false)}>OK</button>
+              <button className="btn-sm btn-success" onClick={() => setIsOfflineGuideOpen(false)}>OK</button>
             </div>
           </div>
         </div>

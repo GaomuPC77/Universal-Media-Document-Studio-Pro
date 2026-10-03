@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Archive,
   Upload,
@@ -12,13 +12,29 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { inspectZip, extractZipEntry, createZipArchive, ZipEntryInfo } from '../../utils/zipUtils';
+import { saveProcessedFile } from '../../utils/historyDb';
+import { FileItem } from '../../types';
+import { notifyCompletion } from '../../utils/notification';
+import { AddToQueuePromptModal } from '../Modals/AddToQueuePromptModal';
 
 interface ZipSuiteProps {
   lang: 'ja' | 'en';
+  fileList?: FileItem[];
+  onResultReady?: (item: FileItem) => void;
+  onShowToast?: (msg: string) => void;
+  onAddFiles?: (files: File[]) => void;
 }
 
-export const ZipSuite: React.FC<ZipSuiteProps> = ({ lang }) => {
+export const ZipSuite: React.FC<ZipSuiteProps> = ({
+  lang,
+  fileList = [],
+  onResultReady,
+  onShowToast,
+  onAddFiles,
+}) => {
   const [activeTab, setActiveTab] = useState<'inspect' | 'create' | 'rename'>('inspect');
+  const [selectedZipId, setSelectedZipId] = useState<string>('');
+  const [pendingPromptFile, setPendingPromptFile] = useState<{ file: File; mode: 'inspect' | 'create' } | null>(null);
 
   // Inspect state
   const [zipFile, setZipFile] = useState<File | null>(null);
@@ -36,6 +52,22 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({ lang }) => {
   const [renamePrefix, setRenamePrefix] = useState<string>('DOC_');
   const [renameSuffix, setRenameSuffix] = useState<string>('');
   const [renameIncludeNumber, setRenameIncludeNumber] = useState<boolean>(true);
+
+  // Auto populate files from fileList if available
+  useEffect(() => {
+    if (fileList.length > 0) {
+      if (!zipFile) {
+        const foundZip = fileList.find((f) => f.format === 'zip' || f.name.toLowerCase().endsWith('.zip'));
+        if (foundZip && foundZip.file) {
+          setSelectedZipId(foundZip.id);
+          handleSelectZip(foundZip.file);
+        }
+      }
+      if (createFiles.length === 0) {
+        setCreateFiles(fileList.filter((f) => f.file).map((f) => ({ id: f.id, file: f.file, name: f.name, size: f.size })));
+      }
+    }
+  }, [fileList]);
 
   // Handle ZIP inspect
   const handleSelectZip = async (file: File) => {
@@ -56,14 +88,35 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({ lang }) => {
     if (!zipFile) return;
     try {
       const blob = await extractZipEntry(zipFile, entryName);
+      const fileName = entryName.split('/').pop() || entryName;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = entryName.split('/').pop() || entryName;
+      a.download = fileName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      const ext = fileName.split('.').pop()?.toLowerCase() || 'txt';
+      await saveProcessedFile(`zip_ext_${Date.now()}`, zipFile.name, fileName, blob, ext as any);
+
+      if (onResultReady) {
+        onResultReady({
+          id: `res_zipext_${Date.now()}`,
+          name: fileName,
+          file: new File([blob], fileName, { type: blob.type }),
+          size: blob.size,
+          type: blob.type,
+          format: ext as any,
+          targetFormat: ext as any,
+          status: 'done',
+          progress: 100,
+          resultBlob: blob,
+          resultName: fileName,
+        });
+      }
+      if (onShowToast) onShowToast(lang === 'ja' ? `「${fileName}」を抽出・保存しました` : `Extracted "${fileName}"`);
     } catch (e) {
       console.error('Extract failed:', e);
     }
@@ -73,6 +126,7 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({ lang }) => {
   const handleCreateZipArchive = async () => {
     if (createFiles.length === 0) return;
     setIsCreatingZip(true);
+    const resultName = zipArchiveName.endsWith('.zip') ? zipArchiveName : `${zipArchiveName}.zip`;
     try {
       const filesToArchive = createFiles.map((f, idx) => {
         let finalName = f.name;
@@ -92,11 +146,32 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({ lang }) => {
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = zipArchiveName.endsWith('.zip') ? zipArchiveName : `${zipArchiveName}.zip`;
+      a.download = resultName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      await saveProcessedFile(`zip_create_${Date.now()}`, 'batch_files', resultName, zipBlob, 'zip');
+
+      if (onResultReady) {
+        onResultReady({
+          id: `res_zipcreate_${Date.now()}`,
+          name: resultName,
+          file: new File([zipBlob], resultName, { type: 'application/zip' }),
+          size: zipBlob.size,
+          type: 'application/zip',
+          format: 'zip',
+          targetFormat: 'zip',
+          status: 'done',
+          progress: 100,
+          resultBlob: zipBlob,
+          resultName,
+        });
+      }
+
+      notifyCompletion(lang === 'ja' ? 'ZIPアーカイブの作成が完了しました' : 'ZIP Created', resultName);
+      if (onShowToast) onShowToast(lang === 'ja' ? `「${resultName}」を作成しました` : `Saved "${resultName}"`);
     } catch (e) {
       console.error('Failed to create zip:', e);
     } finally {
@@ -106,6 +181,48 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({ lang }) => {
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl mx-auto">
+      {/* Add To Queue Confirmation Modal */}
+      <AddToQueuePromptModal
+        file={pendingPromptFile?.file || null}
+        isOpen={!!pendingPromptFile}
+        lang={lang}
+        onConfirmAddToQueue={() => {
+          if (!pendingPromptFile) return;
+          const { file, mode } = pendingPromptFile;
+          if (onAddFiles) {
+            onAddFiles([file]);
+          }
+          if (mode === 'inspect') {
+            handleSelectZip(file);
+          } else {
+            setCreateFiles((prev) => [
+              ...prev,
+              { id: `cf_${Date.now()}`, file, name: file.name, size: file.size },
+            ]);
+          }
+          if (onShowToast) {
+            onShowToast(lang === 'ja' ? '変換・処理ステータス（全体キュー）に追加しました' : 'Added to global status queue');
+          }
+          setPendingPromptFile(null);
+        }}
+        onUseLocalOnly={() => {
+          if (!pendingPromptFile) return;
+          const { file, mode } = pendingPromptFile;
+          if (mode === 'inspect') {
+            handleSelectZip(file);
+          } else {
+            setCreateFiles((prev) => [
+              ...prev,
+              { id: `cf_${Date.now()}`, file, name: file.name, size: file.size },
+            ]);
+          }
+          if (onShowToast) {
+            onShowToast(lang === 'ja' ? 'このタブのみに読み込みました' : 'Loaded into this tab only');
+          }
+          setPendingPromptFile(null);
+        }}
+      />
+
       {/* Sub Tabs */}
       <div className="grid grid-cols-3 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 max-w-md mx-auto w-full">
         {[
@@ -160,10 +277,43 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({ lang }) => {
               accept=".zip,application/zip"
               className="hidden"
               onChange={(e) => {
-                if (e.target.files && e.target.files[0]) handleSelectZip(e.target.files[0]);
+                if (e.target.files && e.target.files[0]) {
+                  setPendingPromptFile({ file: e.target.files[0], mode: 'inspect' });
+                  e.target.value = '';
+                }
               }}
             />
           </div>
+
+          {/* Select Loaded ZIP */}
+          {fileList.length > 0 && (
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                {lang === 'ja' ? '読み込み済みZIPファイルから選択:' : 'Select from Loaded ZIPs:'}
+              </label>
+              <select
+                value={selectedZipId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setSelectedZipId(id);
+                  const found = fileList.find((f) => f.id === id);
+                  if (found && found.file) {
+                    handleSelectZip(found.file);
+                  }
+                }}
+                className="main-select"
+              >
+                <option value="">{lang === 'ja' ? '-- アップロードされたZIPを選択 --' : '-- Select Loaded ZIP --'}</option>
+                {fileList
+                  .filter((f) => f.format === 'zip' || f.name.toLowerCase().endsWith('.zip'))
+                  .map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name} ({(f.size / 1024).toFixed(1)} KB)
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
 
           {!zipFile ? (
             <div
@@ -254,16 +404,10 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({ lang }) => {
               multiple
               className="hidden"
               onChange={(e) => {
-                if (e.target.files) {
-                  const newFiles = Array.from(e.target.files).map((f: File) => ({
-                    id: Math.random().toString(36).substring(2, 9),
-                    file: f,
-                    name: f.name,
-                    size: f.size,
-                  }));
-                  setCreateFiles((prev) => [...prev, ...newFiles]);
+                if (e.target.files && e.target.files[0]) {
+                  setPendingPromptFile({ file: e.target.files[0], mode: 'create' });
+                  e.target.value = '';
                 }
-                e.target.value = '';
               }}
             />
           </div>
