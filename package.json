@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "vite build",
+    "build": "vite build && cp dist/index.html public/converter_core.html",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
@@ -19,8 +19,10 @@
     "docx": "^9.7.2",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
+    "firebase": "^13.1.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
+    "jsqr": "^1.4.0",
     "jszip": "^3.10.2",
     "lucide-react": "^0.546.0",
     "mammoth": "^1.12.3",

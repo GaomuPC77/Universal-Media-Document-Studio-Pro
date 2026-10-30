@@ -29,6 +29,7 @@ interface StatusQueueCardProps {
   onOpenDrivePicker: () => void;
   onShowToast: (msg: string) => void;
   onClearCache?: () => void;
+  onOpenBackup?: () => void;
   overallProgress?: number;
   overallStatusText?: string;
 }
@@ -42,6 +43,7 @@ export const StatusQueueCard: React.FC<StatusQueueCardProps> = ({
   onOpenDrivePicker,
   onShowToast,
   onClearCache,
+  onOpenBackup,
   overallProgress = 0,
   overallStatusText,
 }) => {
@@ -179,7 +181,7 @@ export const StatusQueueCard: React.FC<StatusQueueCardProps> = ({
           color: 'var(--text-sub)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <span
             style={{
               display: 'inline-block',

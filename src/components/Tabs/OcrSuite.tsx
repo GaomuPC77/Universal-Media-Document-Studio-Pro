@@ -9,11 +9,17 @@ import {
   RefreshCw,
   FileText,
   Layers,
+  Camera,
+  CameraOff,
+  ExternalLink,
+  Image as ImageIcon,
+  ScanLine,
 } from 'lucide-react';
 import Tesseract from 'tesseract.js';
+import jsQR from 'jsqr';
 import { generateQrCode, QrOptions } from '../../utils/qrUtils';
 import { createDocxFromText } from '../../utils/officeUtils';
-import { extractPdfText } from '../../utils/pdfUtils';
+import { extractPdfText, convertPdfToImages } from '../../utils/pdfUtils';
 import { saveProcessedFile } from '../../utils/historyDb';
 import { FileItem } from '../../types';
 import { notifyCompletion } from '../../utils/notification';
@@ -36,12 +42,12 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
   onShowToast,
   onAddFiles,
 }) => {
-  const [activeTab, setActiveTab] = useState<'ocr' | 'qr'>('ocr');
+  const [activeTab, setActiveTab] = useState<'ocr' | 'qr-scan' | 'qr'>('ocr');
 
   // OCR state
   const [selectedFileId, setSelectedFileId] = useState<string>('');
   const [ocrImage, setOcrImage] = useState<File | null>(null);
-  const [pendingPromptFile, setPendingPromptFile] = useState<File | null>(null);
+  const [pendingPromptFile, setPendingPromptFile] = useState<{ file: File; mode: 'ocr' | 'qr-scan' } | null>(null);
   const [ocrImagePreview, setOcrImagePreview] = useState<string>('');
   const [extractedText, setExtractedText] = useState<string>('');
   const [isOcrProcessing, setIsOcrProcessing] = useState(false);
@@ -49,6 +55,161 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
   const [ocrLang, setOcrLang] = useState<'jpn+eng' | 'jpn' | 'eng'>('jpn+eng');
   const [copied, setCopied] = useState(false);
   const ocrInputRef = useRef<HTMLInputElement>(null);
+
+  // QR Scanner state
+  const [qrScanMode, setQrScanMode] = useState<'image' | 'camera'>('image');
+  const [selectedQrFileId, setSelectedQrFileId] = useState<string>('');
+  const [qrScanPreview, setQrScanPreview] = useState<string>('');
+  const [qrDecodedText, setQrDecodedText] = useState<string>('');
+  const [qrScanError, setQrScanError] = useState<string>('');
+  const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [qrCopied, setQrCopied] = useState<boolean>(false);
+  const qrFileInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const scanCanvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+
+  // Stop camera helper
+  const stopCamera = () => {
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    setIsCameraActive(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
+
+  // Decode QR from File (Image or PDF)
+  const handleScanQrFromFile = async (file: File) => {
+    setQrScanError('');
+    setQrDecodedText('');
+    try {
+      let imageSourceUrl = '';
+      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+        const pages = await convertPdfToImages(file, { format: 'png', dpi: 150 });
+        if (pages.length > 0) {
+          imageSourceUrl = URL.createObjectURL(pages[0].blob);
+        } else {
+          setQrScanError(lang === 'ja' ? 'PDFからページを読み込めませんでした。' : 'Could not render PDF page.');
+          return;
+        }
+      } else {
+        imageSourceUrl = URL.createObjectURL(file);
+      }
+
+      setQrScanPreview(imageSourceUrl);
+
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // Try original scale first, then downscaled if very large
+        const scales = [1, 0.5, 1.5];
+        let foundCode: string | null = null;
+
+        for (const s of scales) {
+          canvas.width = Math.max(1, Math.floor(img.width * s));
+          canvas.height = Math.max(1, Math.floor(img.height * s));
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: 'attemptBoth',
+          });
+          if (code && code.data) {
+            foundCode = code.data;
+            break;
+          }
+        }
+
+        if (foundCode) {
+          setQrDecodedText(foundCode);
+          notifyCompletion(lang === 'ja' ? 'QRコードを読み取りました' : 'QR Code Decoded', foundCode.slice(0, 50));
+          if (onShowToast) onShowToast(lang === 'ja' ? 'QRコードの読み取りに成功しました' : 'QR Code successfully decoded');
+        } else {
+          setQrScanError(
+            lang === 'ja'
+              ? '画像からQRコードが検出されませんでした。鮮明な画像を選択してください。'
+              : 'No QR code detected in this image. Please try a clearer image.'
+          );
+        }
+      };
+      img.onerror = () => {
+        setQrScanError(lang === 'ja' ? '画像の読み込みに失敗しました。' : 'Failed to load image.');
+      };
+      img.src = imageSourceUrl;
+    } catch (err: any) {
+      setQrScanError(err?.message || 'QR Scan failed');
+    }
+  };
+
+  // Start Camera for real-time QR scanning
+  const startCamera = async (mode: 'environment' | 'user' = facingMode) => {
+    stopCamera();
+    setQrScanError('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: mode, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      setIsCameraActive(true);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute('playsinline', 'true');
+        await videoRef.current.play();
+        requestAnimationFrame(tickCameraScan);
+      }
+    } catch (err: any) {
+      console.error('Camera access error:', err);
+      setQrScanError(
+        lang === 'ja'
+          ? 'カメラへのアクセスが許可されていないか、利用可能なカメラが見つかりません。ブラウザのカメラ権限設定をご確認ください。'
+          : 'Camera access denied or no camera available. Please check browser permissions.'
+      );
+      setIsCameraActive(false);
+    }
+  };
+
+  const tickCameraScan = () => {
+    const video = videoRef.current;
+    const canvas = scanCanvasRef.current;
+    if (video && canvas && video.readyState === video.HAVE_ENOUGH_DATA) {
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (ctx) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'dontInvert',
+        });
+        if (code && code.data) {
+          setQrDecodedText(code.data);
+          setQrScanPreview(canvas.toDataURL('image/png'));
+          stopCamera();
+          notifyCompletion(lang === 'ja' ? 'カメラでQRコードを読み取りました' : 'QR Code Scanned via Camera', code.data.slice(0, 50));
+          if (onShowToast) onShowToast(lang === 'ja' ? 'カメラからQRコードを読み取りました！' : 'QR Code scanned from camera!');
+          return;
+        }
+      }
+    }
+    if (streamRef.current) {
+      animFrameRef.current = requestAnimationFrame(tickCameraScan);
+    }
+  };
 
   // Auto load shared file or from fileList
   useEffect(() => {
@@ -79,7 +240,8 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
   // Handle image upload for OCR
   const handleSelectOcrFile = async (file: File) => {
     setOcrImage(file);
-    if (file.type.startsWith('image/')) {
+    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+    if (!isPdf && (file.type.startsWith('image/') || /\.(png|jpe?g|webp|bmp|gif|svg)$/i.test(file.name))) {
       setOcrImagePreview(URL.createObjectURL(file));
     } else {
       setOcrImagePreview('');
@@ -89,14 +251,84 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
     setOcrProgress(5);
 
     try {
-      if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        const text = await extractPdfText(file);
+      if (isPdf) {
+        let text = '';
+        try {
+          text = await extractPdfText(file);
+        } catch (pdfTextErr) {
+          console.warn('Direct PDF text extraction failed, trying OCR fallback:', pdfTextErr);
+        }
+
+        if (!text || text.trim().length === 0) {
+          // If PDF contains scanned images without digital text layer, convert first page to image and OCR
+          try {
+            setOcrProgress(20);
+            const pageImages = await convertPdfToImages(file, { format: 'png', pages: [1], dpi: 150 });
+            if (pageImages && pageImages.length > 0) {
+              setOcrImagePreview(URL.createObjectURL(pageImages[0].blob));
+              const canvas = await new Promise<HTMLCanvasElement>((resolve, reject) => {
+                const img = new Image();
+                const u = URL.createObjectURL(pageImages[0].blob);
+                img.onload = () => {
+                  URL.revokeObjectURL(u);
+                  const c = document.createElement('canvas');
+                  c.width = img.naturalWidth || img.width;
+                  c.height = img.naturalHeight || img.height;
+                  const ctx = c.getContext('2d');
+                  if (ctx) ctx.drawImage(img, 0, 0);
+                  resolve(c);
+                };
+                img.onerror = (err) => {
+                  URL.revokeObjectURL(u);
+                  reject(err);
+                };
+                img.src = u;
+              });
+
+              const result = await Tesseract.recognize(canvas, ocrLang, {
+                logger: (m) => {
+                  if (m.status === 'recognizing text' && typeof m.progress === 'number') {
+                    setOcrProgress(Math.round(20 + m.progress * 80));
+                  }
+                },
+              });
+              text = result.data.text.trim();
+            }
+          } catch (ocrFallbackErr) {
+            console.warn('PDF OCR fallback failed:', ocrFallbackErr);
+          }
+        }
+
         const finalText = text || (lang === 'ja' ? '(PDFからテキストが抽出されませんでした。画像スキャンPDFの場合は画像形式に変換してOCRをお試しください。)' : '(No text extracted from PDF)');
         setExtractedText(finalText);
         setIsOcrProcessing(false);
       } else {
-        // Run genuine Client-Side Tesseract.js OCR
-        const result = await Tesseract.recognize(file, ocrLang, {
+        // Decode image through browser native image element and canvas to ensure full format compatibility
+        const canvas = await new Promise<HTMLCanvasElement>((resolve, reject) => {
+          const img = new Image();
+          const u = URL.createObjectURL(file);
+          img.onload = () => {
+            URL.revokeObjectURL(u);
+            const c = document.createElement('canvas');
+            c.width = img.naturalWidth || img.width;
+            c.height = img.naturalHeight || img.height;
+            const ctx = c.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(img, 0, 0);
+              resolve(c);
+            } else {
+              reject(new Error('Canvas context not available'));
+            }
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(u);
+            reject(new Error(lang === 'ja' ? '画像の読み込みに失敗しました' : 'Error attempting to read image.'));
+          };
+          img.src = u;
+        });
+
+        // Run genuine Client-Side Tesseract.js OCR on standard canvas
+        const result = await Tesseract.recognize(canvas, ocrLang, {
           logger: (m) => {
             if (m.status === 'recognizing text' && typeof m.progress === 'number') {
               setOcrProgress(Math.round(m.progress * 100));
@@ -254,15 +486,19 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
     <div className="flex flex-col gap-6 max-w-5xl mx-auto">
       {/* Add To Queue Confirmation Modal */}
       <AddToQueuePromptModal
-        file={pendingPromptFile}
+        file={pendingPromptFile?.file || null}
         isOpen={!!pendingPromptFile}
         lang={lang}
         onConfirmAddToQueue={() => {
           if (!pendingPromptFile) return;
           if (onAddFiles) {
-            onAddFiles([pendingPromptFile]);
+            onAddFiles([pendingPromptFile.file]);
           }
-          handleSelectOcrFile(pendingPromptFile);
+          if (pendingPromptFile.mode === 'ocr') {
+            handleSelectOcrFile(pendingPromptFile.file);
+          } else {
+            handleScanQrFromFile(pendingPromptFile.file);
+          }
           if (onShowToast) {
             onShowToast(lang === 'ja' ? '変換・処理ステータス（全体キュー）に追加しました' : 'Added to global status queue');
           }
@@ -270,7 +506,11 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
         }}
         onUseLocalOnly={() => {
           if (!pendingPromptFile) return;
-          handleSelectOcrFile(pendingPromptFile);
+          if (pendingPromptFile.mode === 'ocr') {
+            handleSelectOcrFile(pendingPromptFile.file);
+          } else {
+            handleScanQrFromFile(pendingPromptFile.file);
+          }
           if (onShowToast) {
             onShowToast(lang === 'ja' ? 'このタブのみに読み込みました' : 'Loaded into this tab only');
           }
@@ -279,28 +519,47 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
       />
 
       {/* Sub Tabs */}
-      <div className="grid grid-cols-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 max-w-sm mx-auto w-full">
+      <div className="grid grid-cols-3 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 max-w-lg mx-auto w-full">
         <button
-          onClick={() => setActiveTab('ocr')}
-          className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition ${
+          onClick={() => {
+            stopCamera();
+            setActiveTab('ocr');
+          }}
+          className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition ${
             activeTab === 'ocr'
               ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-xs'
               : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
           }`}
         >
-          <ScanText className="w-4 h-4" />
+          <ScanText className="w-4 h-4 shrink-0" />
           <span>{lang === 'ja' ? 'OCR 文字認識' : 'OCR Text Scan'}</span>
         </button>
         <button
-          onClick={() => setActiveTab('qr')}
-          className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition ${
+          onClick={() => {
+            setActiveTab('qr-scan');
+          }}
+          className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition ${
+            activeTab === 'qr-scan'
+              ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+          }`}
+        >
+          <ScanLine className="w-4 h-4 shrink-0" />
+          <span>{lang === 'ja' ? 'QRコード読み取り' : 'Scan QR Code'}</span>
+        </button>
+        <button
+          onClick={() => {
+            stopCamera();
+            setActiveTab('qr');
+          }}
+          className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition ${
             activeTab === 'qr'
               ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-xs'
               : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
           }`}
         >
-          <QrCode className="w-4 h-4" />
-          <span>{lang === 'ja' ? 'QRコード生成' : 'QR Code Studio'}</span>
+          <QrCode className="w-4 h-4 shrink-0" />
+          <span>{lang === 'ja' ? 'QRコード生成' : 'Create QR Code'}</span>
         </button>
       </div>
 
@@ -329,14 +588,6 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
                 <option value="jpn">日本語のみ (Japanese)</option>
                 <option value="eng">英語のみ (English)</option>
               </select>
-
-              <button
-                onClick={() => ocrInputRef.current?.click()}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-xs"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>{lang === 'ja' ? 'ファイル選択' : 'Select File'}</span>
-              </button>
               <input
                 ref={ocrInputRef}
                 type="file"
@@ -344,7 +595,7 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
                 className="hidden"
                 onChange={(e) => {
                   if (e.target.files && e.target.files[0]) {
-                    setPendingPromptFile(e.target.files[0]);
+                    setPendingPromptFile({ file: e.target.files[0], mode: 'ocr' });
                     e.target.value = '';
                   }
                 }}
@@ -353,34 +604,43 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
           </div>
 
           {/* Select Loaded File from Main Queue */}
-          {fileList.length > 0 && (
-            <div>
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                {lang === 'ja' ? '読み込み済みファイルから選択:' : 'Select from Loaded Files:'}
-              </label>
-              <select
-                value={selectedFileId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  setSelectedFileId(id);
-                  const found = fileList.find((f) => f.id === id);
-                  if (found && found.file) {
-                    handleSelectOcrFile(found.file);
-                  }
-                }}
-                className="main-select"
-              >
-                <option value="">{lang === 'ja' ? '-- アップロードされたファイルを選択 --' : '-- Select Loaded File --'}</option>
-                {fileList
-                  .filter((f) => ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'pdf'].includes(f.format) || f.file)
-                  .map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name} ({(f.size / 1024).toFixed(1)} KB)
-                    </option>
-                  ))}
-              </select>
-            </div>
-          )}
+          <div>
+            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+              {lang === 'ja' ? 'OCR対象の画像 / PDFファイルを選択:' : 'Select Target Image or PDF File:'}
+            </label>
+            <select
+              value={selectedFileId}
+              onChange={(e) => {
+                const id = e.target.value;
+                if (id === '__upload_new__') {
+                  ocrInputRef.current?.click();
+                  return;
+                }
+                setSelectedFileId(id);
+                const found = fileList.find((f) => f.id === id);
+                if (found && found.file) {
+                  handleSelectOcrFile(found.file);
+                }
+              }}
+              className="main-select"
+            >
+              <option value="">{lang === 'ja' ? '-- アップロードされた画像/PDFを選択 --' : '-- Select Loaded Image/PDF --'}</option>
+              <option value="__upload_new__">
+                {lang === 'ja' ? '📁 ＋ 新しい画像/PDFを端末からアップロード...' : '📁 + Upload New Image/PDF File...'}
+              </option>
+              {fileList
+                .filter(
+                  (f) =>
+                    ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'pdf'].includes(f.format?.toLowerCase() || '') ||
+                    /\.(png|jpe?g|webp|bmp|pdf)$/i.test(f.name)
+                )
+                .map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name} ({(f.size / 1024).toFixed(1)} KB)
+                  </option>
+                ))}
+            </select>
+          </div>
 
           {!ocrImage ? (
             <div
@@ -479,6 +739,280 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* 1.5. QR Code Scanner Tool (Camera & Image) */}
+      {activeTab === 'qr-scan' && (
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm flex flex-col gap-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
+            <div>
+              <h3 className="font-bold text-sm sm:text-base text-slate-800 dark:text-slate-100">
+                {lang === 'ja' ? 'カメラ・画像・PDFからQRコード読み取り' : 'Scan QR Code from Camera, Image, or PDF'}
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {lang === 'ja'
+                  ? '端末のカメラを使ったリアルタイムスキャン、または画像・スクリーンショット・PDF内のQRコードを高速解析します。'
+                  : 'Scan QR codes in real-time using your device camera or decode directly from image files and PDFs.'}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  stopCamera();
+                  setQrScanMode('image');
+                }}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition ${
+                  qrScanMode === 'image'
+                    ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-300'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100'
+                }`}
+              >
+                <ImageIcon className="w-3.5 h-3.5" />
+                <span>{lang === 'ja' ? '画像・PDFから読取' : 'From Image / PDF'}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setQrScanMode('camera');
+                  startCamera(facingMode);
+                }}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition ${
+                  qrScanMode === 'camera'
+                    ? 'border-blue-600 bg-blue-600 text-white shadow-xs'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100'
+                }`}
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>{lang === 'ja' ? 'カメラでスキャン' : 'Scan with Camera'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Select Loaded File from Main Queue */}
+          {qrScanMode === 'image' && (
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                {lang === 'ja' ? '読み込み済みファイルからQRを解析:' : 'Decode QR from Loaded Files:'}
+              </label>
+              <select
+                value={selectedQrFileId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  if (id === '__upload_new__') {
+                    qrFileInputRef.current?.click();
+                    return;
+                  }
+                  setSelectedQrFileId(id);
+                  const found = fileList.find((f) => f.id === id);
+                  if (found && found.file) {
+                    handleScanQrFromFile(found.file);
+                  }
+                }}
+                className="main-select"
+              >
+                <option value="">{lang === 'ja' ? '-- アップロードされた画像/PDFを選択 --' : '-- Select Loaded Image/PDF --'}</option>
+                <option value="__upload_new__">
+                  {lang === 'ja' ? '📁 ＋ 新しい画像/PDFを端末からアップロード...' : '📁 + Upload New Image/PDF File...'}
+                </option>
+                {fileList
+                  .filter(
+                    (f) =>
+                      ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'pdf'].includes(f.format?.toLowerCase() || '') ||
+                      /\.(png|jpe?g|webp|bmp|pdf)$/i.test(f.name)
+                  )
+                  .map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name} ({(f.size / 1024).toFixed(1)} KB)
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+            {/* Left: Camera Viewport or Image Dropzone */}
+            <div className="flex flex-col gap-3">
+              {qrScanMode === 'camera' ? (
+                <div className="flex flex-col gap-3">
+                  <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 aspect-video flex items-center justify-center">
+                    <video
+                      ref={videoRef}
+                      className={`w-full h-full object-cover ${isCameraActive ? 'block' : 'hidden'}`}
+                      muted
+                      playsInline
+                    />
+                    <canvas ref={scanCanvasRef} className="hidden" />
+
+                    {isCameraActive && (
+                      <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                        <div className="w-48 h-48 border-2 border-emerald-400/90 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.35)] relative">
+                          <div className="absolute inset-x-2 top-1/2 h-0.5 bg-emerald-400 animate-pulse" />
+                        </div>
+                      </div>
+                    )}
+
+                    {!isCameraActive && (
+                      <div className="flex flex-col items-center justify-center p-6 text-center text-slate-400 gap-3">
+                        <Camera className="w-10 h-10 text-slate-500" />
+                        <p className="text-xs">
+                          {lang === 'ja'
+                            ? 'カメラを起動してQRコードを枠内に合わせてください'
+                            : 'Start the camera and align the QR code within the frame'}
+                        </p>
+                        <button
+                          onClick={() => startCamera(facingMode)}
+                          className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs transition"
+                        >
+                          {lang === 'ja' ? 'カメラを起動する' : 'Start Camera'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => {
+                        const nextMode = facingMode === 'environment' ? 'user' : 'environment';
+                        setFacingMode(nextMode);
+                        if (isCameraActive) startCamera(nextMode);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>
+                        {lang === 'ja'
+                          ? `カメラ切替 (${facingMode === 'environment' ? '背面' : '前面'})`
+                          : `Switch Camera (${facingMode})`}
+                      </span>
+                    </button>
+
+                    {isCameraActive && (
+                      <button
+                        onClick={stopCamera}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 dark:bg-red-950/50 text-red-600 dark:text-red-400 text-xs font-bold hover:bg-red-100 transition"
+                      >
+                        <CameraOff className="w-3.5 h-3.5" />
+                        <span>{lang === 'ja' ? 'カメラ停止' : 'Stop Camera'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  <input
+                    ref={qrFileInputRef}
+                    type="file"
+                    accept="image/*,application/pdf"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        setPendingPromptFile({ file: e.target.files[0], mode: 'qr-scan' });
+                        e.target.value = '';
+                      }
+                    }}
+                  />
+
+                  <div
+                    onClick={() => qrFileInputRef.current?.click()}
+                    className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer bg-slate-50/50 dark:bg-slate-800/30 transition min-h-[200px]"
+                  >
+                    {qrScanPreview ? (
+                      <div className="flex flex-col items-center gap-2">
+                        <img src={qrScanPreview} alt="QR Scan Source" className="max-h-48 object-contain rounded-lg shadow-xs" />
+                        <span className="text-xs text-blue-600 dark:text-blue-400 font-semibold underline mt-1">
+                          {lang === 'ja' ? '別の画像・PDFを選択する' : 'Choose another image or PDF'}
+                        </span>
+                      </div>
+                    ) : (
+                      <>
+                        <QrCode className="w-10 h-10 text-slate-400 mb-2" />
+                        <p className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-300">
+                          {lang === 'ja' ? 'QRコードが含まれる画像またはPDFを選択' : 'Select an image or PDF containing a QR Code'}
+                        </p>
+                        <p className="text-[11px] text-slate-400 mt-1">
+                          {lang === 'ja' ? 'PNG, JPG, WebP, BMP, PDF 対応' : 'Supports PNG, JPG, WebP, BMP, PDF'}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Right: Decoded QR Result */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-500 uppercase">
+                  {lang === 'ja' ? 'QRコード読み取り結果' : 'Decoded QR Content'}
+                </span>
+
+                {qrDecodedText && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(qrDecodedText);
+                        setQrCopied(true);
+                        if (onShowToast) onShowToast(lang === 'ja' ? '読み取り結果をコピーしました' : 'Copied to clipboard');
+                        setTimeout(() => setQrCopied(false), 2000);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100"
+                    >
+                      {qrCopied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{qrCopied ? (lang === 'ja' ? 'コピー済' : 'Copied') : (lang === 'ja' ? 'コピー' : 'Copy')}</span>
+                    </button>
+
+                    {/^https?:\/\//i.test(qrDecodedText.trim()) && (
+                      <a
+                        href={qrDecodedText.trim()}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>{lang === 'ja' ? 'URLを開く' : 'Open URL'}</span>
+                      </a>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {qrScanError && (
+                <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300">
+                  {qrScanError}
+                </div>
+              )}
+
+              <textarea
+                value={qrDecodedText}
+                onChange={(e) => setQrDecodedText(e.target.value)}
+                placeholder={
+                  lang === 'ja'
+                    ? 'ここに読み取ったURLやテキストが表示されます...'
+                    : 'Decoded URL or text will appear here...'
+                }
+                rows={7}
+                className="w-full p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-mono text-xs text-slate-800 dark:text-slate-200 outline-none focus:border-blue-500"
+              />
+
+              {qrDecodedText && (
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => {
+                      setQrText(qrDecodedText);
+                      setQrType(/^https?:\/\//i.test(qrDecodedText) ? 'url' : 'text');
+                      setActiveTab('qr');
+                    }}
+                    className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    <span>{lang === 'ja' ? 'この内容でQRコードを再生成・色変更する' : 'Customize & Re-generate QR with this content'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

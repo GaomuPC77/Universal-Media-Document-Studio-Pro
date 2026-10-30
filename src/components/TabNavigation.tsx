@@ -3,6 +3,7 @@ import {
   Layers,
   FileText,
   Image as ImageIcon,
+  Sliders,
   Briefcase,
   FileCode,
   PenTool,
@@ -12,6 +13,7 @@ import {
   History,
   ChevronLeft,
   ChevronRight,
+  ArrowRightLeft,
 } from 'lucide-react';
 
 interface TabNavigationProps {
@@ -32,15 +34,15 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({ activeTab, setActi
   const hasMovedRef = useRef(false);
 
   const tabs = [
-    { id: 'converter', labelJa: '変換', labelEn: 'Convert', icon: Layers },
     { id: 'pdf-suite', labelJa: 'PDF編集・整理', labelEn: 'PDF Toolkit', icon: FileText },
     { id: 'pdf-image', labelJa: 'PDF ⇔ 画像', labelEn: 'PDF ⇔ Image', icon: ImageIcon },
-    { id: 'office-suite', labelJa: 'Office ⇔ PDF', labelEn: 'Office Suite', icon: Briefcase },
+    { id: 'image-editor', labelJa: '画像編集・変換', labelEn: 'Image Studio & Convert', icon: Sliders },
+    { id: 'office-suite', labelJa: 'Office・データ表', labelEn: 'Office & Data Suite', icon: Briefcase },
     { id: 'html-studio', labelJa: 'HTML・Markdown', labelEn: 'HTML & Markdown', icon: FileCode },
     { id: 'sign-stamp', labelJa: '電子印鑑・署名', labelEn: 'Sign & Stamp', icon: PenTool },
     { id: 'ocr-qr', labelJa: 'OCR・QR', labelEn: 'OCR & QR', icon: ScanText },
     { id: 'diff-suite', labelJa: '差分比較', labelEn: 'Diff Studio', icon: GitCompare },
-    { id: 'zip-suite', labelJa: 'ZIPアーカイブ', labelEn: 'ZIP & Rename', icon: Archive },
+    { id: 'zip-suite', labelJa: 'ZIP・一括リネーム', labelEn: 'ZIP & Rename', icon: Archive },
     { id: 'history', labelJa: '履歴', labelEn: 'History', icon: History },
   ];
 
@@ -160,7 +162,7 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({ activeTab, setActi
                 setActiveTab(tab.id);
                 e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
               }}
-              className={`tab-btn ${isActive ? 'active' : ''} inline-flex items-center gap-1.5 shrink-0`}
+              className={`tab-btn ${isActive ? 'active' : ''} inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap`}
             >
               <Icon className="w-4 h-4" />
               <span>{lang === 'ja' ? tab.labelJa : tab.labelEn}</span>

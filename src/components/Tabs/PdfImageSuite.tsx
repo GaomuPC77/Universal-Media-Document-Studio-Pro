@@ -39,6 +39,8 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
 }) => {
   const [activeMode, setActiveMode] = useState<'pdf-to-img' | 'img-to-pdf'>('pdf-to-img');
   const [pendingPromptFile, setPendingPromptFile] = useState<{ file: File; mode: 'pdf' | 'img' } | null>(null);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   // PDF to Image state
   const [selectedPdfId, setSelectedPdfId] = useState<string>('');
@@ -353,20 +355,27 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
 
           {/* Select Loaded PDF */}
           <div>
-            <label>{lang === 'ja' ? '変換対象のPDFファイルを選択:' : 'Select Target PDF File:'}</label>
+            <label className="whitespace-nowrap">{lang === 'ja' ? '変換対象のPDFファイルを選択:' : 'Select Target PDF File:'}</label>
             <select
               value={selectedPdfId}
               onChange={(e) => {
-                const id = e.target.value;
-                setSelectedPdfId(id);
-                const found = fileList.find((f) => f.id === id);
+                const val = e.target.value;
+                if (val === '__upload_new__') {
+                  pdfInputRef.current?.click();
+                  return;
+                }
+                setSelectedPdfId(val);
+                const found = fileList.find((f) => f.id === val);
                 if (found && found.file) {
                   handleSelectPdf(found.file);
                 }
               }}
               className="main-select"
             >
-              <option value="">{lang === 'ja' ? '-- アップロードされたPDFを選択 --' : '-- Select Loaded PDF --'}</option>
+              <option value="">{lang === 'ja' ? '-- アップロードされたPDFを選択 --' : '-- Select Uploaded PDF --'}</option>
+              <option value="__upload_new__">
+                {lang === 'ja' ? '📁 ＋ 新しいPDFを端末からアップロード...' : '📁 + Upload New PDF File...'}
+              </option>
               {fileList
                 .filter((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'))
                 .map((f) => (
@@ -375,6 +384,19 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
                   </option>
                 ))}
             </select>
+            <input
+              ref={pdfInputRef}
+              type="file"
+              accept=".pdf,application/pdf"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files[0]) {
+                  const file = e.target.files[0];
+                  setPendingPromptFile({ file, mode: 'pdf' });
+                  e.target.value = '';
+                }
+              }}
+            />
           </div>
 
           {/* Settings Grid */}
@@ -500,14 +522,74 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
             </span>
           </div>
 
+          {/* Image Files Selector */}
+          <div>
+            <label className="whitespace-nowrap">{lang === 'ja' ? '結合対象の画像ファイルを選択・追加:' : 'Select Target Image File to Add:'}</label>
+            <select
+              value=""
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === '__upload_new__') {
+                  imageInputRef.current?.click();
+                  return;
+                }
+                const found = fileList.find((f) => f.id === val);
+                if (found && found.file) {
+                  const url = URL.createObjectURL(found.file);
+                  setImageFiles((prev) => [
+                    ...prev,
+                    { id: `img_${Date.now()}_${Math.random()}`, file: found.file!, name: found.name, previewUrl: url, size: found.size },
+                  ]);
+                }
+              }}
+              className="main-select"
+            >
+              <option value="">{lang === 'ja' ? '-- アップロードされた画像を選択 --' : '-- Select Uploaded Image --'}</option>
+              <option value="__upload_new__">
+                {lang === 'ja' ? '📁 ＋ 新しい画像を端末からアップロード...' : '📁 + Upload New Image File...'}
+              </option>
+              {fileList
+                .filter((f) => ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif'].includes(f.format) || /\.(png|jpe?g|webp|svg|bmp|gif)$/i.test(f.name))
+                .map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name} ({(f.size / 1024).toFixed(1)} KB)
+                  </option>
+                ))}
+            </select>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  const newImgs = Array.from(e.target.files).map((f: File) => ({
+                    id: `img_${Date.now()}_${Math.random()}`,
+                    file: f,
+                    name: f.name,
+                    previewUrl: URL.createObjectURL(f),
+                    size: f.size,
+                  }));
+                  setImageFiles((prev) => [...prev, ...newImgs]);
+                  if (onAddFiles) onAddFiles(Array.from(e.target.files) as File[]);
+                  e.target.value = '';
+                }
+              }}
+            />
+          </div>
+
           {/* Image Files Selection from Loaded list */}
           <div className="flex flex-col gap-2">
-            <label>{lang === 'ja' ? `選択された画像 (${imageFiles.length} 件):` : `Selected Images (${imageFiles.length}):`}</label>
+            <label>{lang === 'ja' ? `結合リストに追加された画像 (${imageFiles.length} 件):` : `Images in Merge List (${imageFiles.length}):`}</label>
             {imageFiles.length === 0 ? (
-              <div className="text-center py-6 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-500">
+              <div
+                onClick={() => imageInputRef.current?.click()}
+                className="text-center py-6 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-500 cursor-pointer hover:border-blue-500 transition"
+              >
                 {lang === 'ja'
-                  ? '画像が選択されていません。上部「1. 処理するファイルの読み込み・追加」から画像を追加してください。'
-                  : 'No images loaded. Please add images in Section 1 above.'}
+                  ? '画像が選択されていません。上のプルダウンから選択するか、ここをクリックして画像を読み込んでください。'
+                  : 'No images added yet. Select from the dropdown above or click here to upload images.'}
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-h-60 overflow-auto p-1">

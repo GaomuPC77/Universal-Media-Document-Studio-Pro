@@ -194,61 +194,83 @@ export const DiffSuite: React.FC<DiffSuiteProps> = ({
       </div>
 
       {/* Select from loaded files */}
-      {fileList.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700">
-          <div>
-            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-              {lang === 'ja' ? '変更前の文書を選択:' : 'Select Original Document:'}
-            </label>
-            <select
-              value={oldFileId}
-              onChange={async (e) => {
-                const id = e.target.value;
-                setOldFileId(id);
-                const found = fileList.find((f) => f.id === id);
-                if (found && found.file) {
-                  const txt = await loadTextFromFile(found.file);
-                  setOldText(txt);
-                }
-              }}
-              className="main-select text-xs"
-            >
-              <option value="">{lang === 'ja' ? '-- 読み込み済みファイルから選択 --' : '-- Select from loaded --'}</option>
-              {fileList.map((f) => (
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700">
+        <div>
+          <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+            {lang === 'ja' ? '変更前の文書を選択:' : 'Select Original Document:'}
+          </label>
+          <select
+            value={oldFileId}
+            onChange={async (e) => {
+              const id = e.target.value;
+              if (id === '__upload_new__') {
+                fileInputOldRef.current?.click();
+                return;
+              }
+              setOldFileId(id);
+              const found = fileList.find((f) => f.id === id);
+              if (found && found.file) {
+                const txt = await loadTextFromFile(found.file);
+                setOldText(txt);
+              }
+            }}
+            className="main-select text-xs mb-0"
+          >
+            <option value="">{lang === 'ja' ? '-- アップロードされた文書を選択 --' : '-- Select Uploaded Document --'}</option>
+            <option value="__upload_new__">
+              {lang === 'ja' ? '📁 ＋ 新しい文書を端末からアップロード...' : '📁 + Upload New Document File...'}
+            </option>
+            {fileList
+              .filter((f) =>
+                ['txt', 'md', 'markdown', 'html', 'htm', 'csv', 'tsv', 'json', 'docx', 'doc', 'pdf', 'xml', 'js', 'ts', 'css'].includes(f.format?.toLowerCase() || '') ||
+                /\.(txt|md|markdown|html?|csv|tsv|json|docx?|pdf|xml|js|ts|css)$/i.test(f.name)
+              )
+              .map((f) => (
                 <option key={f.id} value={f.id}>
                   {f.name}
                 </option>
               ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-              {lang === 'ja' ? '変更後の文書を選択:' : 'Select Modified Document:'}
-            </label>
-            <select
-              value={newFileId}
-              onChange={async (e) => {
-                const id = e.target.value;
-                setNewFileId(id);
-                const found = fileList.find((f) => f.id === id);
-                if (found && found.file) {
-                  const txt = await loadTextFromFile(found.file);
-                  setNewText(txt);
-                }
-              }}
-              className="main-select text-xs"
-            >
-              <option value="">{lang === 'ja' ? '-- 読み込み済みファイルから選択 --' : '-- Select from loaded --'}</option>
-              {fileList.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          </select>
         </div>
-      )}
+
+        <div>
+          <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+            {lang === 'ja' ? '変更後の文書を選択:' : 'Select Modified Document:'}
+          </label>
+          <select
+            value={newFileId}
+            onChange={async (e) => {
+              const id = e.target.value;
+              if (id === '__upload_new__') {
+                fileInputNewRef.current?.click();
+                return;
+              }
+              setNewFileId(id);
+              const found = fileList.find((f) => f.id === id);
+              if (found && found.file) {
+                const txt = await loadTextFromFile(found.file);
+                setNewText(txt);
+              }
+            }}
+            className="main-select text-xs mb-0"
+          >
+            <option value="">{lang === 'ja' ? '-- アップロードされた文書を選択 --' : '-- Select Uploaded Document --'}</option>
+            <option value="__upload_new__">
+              {lang === 'ja' ? '📁 ＋ 新しい文書を端末からアップロード...' : '📁 + Upload New Document File...'}
+            </option>
+            {fileList
+              .filter((f) =>
+                ['txt', 'md', 'markdown', 'html', 'htm', 'csv', 'tsv', 'json', 'docx', 'doc', 'pdf', 'xml', 'js', 'ts', 'css'].includes(f.format?.toLowerCase() || '') ||
+                /\.(txt|md|markdown|html?|csv|tsv|json|docx?|pdf|xml|js|ts|css)$/i.test(f.name)
+              )
+              .map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+          </select>
+        </div>
+      </div>
 
       {/* Inputs Side-by-side */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

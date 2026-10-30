@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Header } from './components/Header';
 import { CommonUploadCard } from './components/CommonUploadCard';
 import { TabNavigation } from './components/TabNavigation';
-import { UniversalConverter } from './components/Tabs/UniversalConverter';
 import { PdfSuite } from './components/Tabs/PdfSuite';
 import { PdfImageSuite } from './components/Tabs/PdfImageSuite';
 import { OfficeSuite } from './components/Tabs/OfficeSuite';
@@ -12,18 +11,34 @@ import { DiffSuite } from './components/Tabs/DiffSuite';
 import { ZipSuite } from './components/Tabs/ZipSuite';
 import { HistoryTab } from './components/Tabs/HistoryTab';
 import { HtmlStudio } from './components/Tabs/HtmlStudio';
+import { ImageEditorSuite } from './components/Tabs/ImageEditorSuite';
 import { StatusQueueCard } from './components/StatusQueueCard';
 import { FilePreviewModal } from './components/Modals/FilePreviewModal';
 import { DrivePickerModal } from './components/Modals/DrivePickerModal';
 import { HistoryModal } from './components/Modals/HistoryModal';
+import { BackupModal } from './components/Modals/BackupModal';
+import { OfflinePackModal } from './components/Modals/OfflinePackModal';
+import { ShareModal } from './components/Modals/ShareModal';
 import { downloadOfflinePack } from './utils/offlinePack';
-import { uploadFileToDrive, getStoredToken } from './utils/googleDrive';
+import { uploadFileToDrive, getStoredToken, requestGoogleAccessToken } from './utils/googleDrive';
 import { savePendingFile, getPendingFiles, deletePendingFile, clearEntireAppCache } from './utils/historyDb';
 import { FileItem, DocumentFormat } from './types';
-import { UploadCloud, CheckCircle2, ChevronRight, ChevronLeft, X, Sparkles } from 'lucide-react';
+import {
+  UploadCloud,
+  CheckCircle2,
+  ChevronRight,
+  ChevronLeft,
+  X,
+  Sparkles,
+  ArchiveRestore,
+  Smartphone,
+  Download,
+  Upload,
+  HardDrive,
+} from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('converter');
+  const [activeTab, setActiveTab] = useState<string>('pdf-suite');
   const [theme, setTheme] = useState<'auto' | 'light' | 'dark'>('auto');
   const [lang, setLang] = useState<'ja' | 'en'>('ja');
   const [previewItem, setPreviewItem] = useState<FileItem | null>(null);
@@ -37,6 +52,9 @@ export default function App() {
   // Modals state
   const [isDriveModalOpen, setIsDriveModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [isOfflinePackModalOpen, setIsOfflinePackModalOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isFirstLaunchOpen, setIsFirstLaunchOpen] = useState(false);
   const [isAgreedTerms, setIsAgreedTerms] = useState(false);
   const [isTutorialOpen, setIsTutorialOpen] = useState(false);
@@ -118,8 +136,8 @@ export default function App() {
       targetId: 'tabNavContainer',
       titleJa: '2. 処理ツールの選択（機能タブ）',
       titleEn: '2. Select Processing Tool',
-      descJa: '「変換」「PDF編集」「Office変換」「HTML・Markdown」「電子印鑑」「OCR」「差分比較」「ZIP」「履歴」など、目的の処理タブを選択して切り替えます。左右の矢印ボタンやマウスホイール・ドラッグで横スクロールできます。',
-      descEn: 'Switch between suites like Universal Converter, PDF Toolkit, Office Suite, HTML/Markdown Studio, Sign & Stamp, OCR, Diff Studio, ZIP, and History.',
+      descJa: '「PDF編集・整理」「PDF ⇔ 画像」「画像編集・変換」「Office・データ表」「HTML・Markdown」「電子印鑑」「OCR」「差分比較」「ZIP・リネーム」「履歴」など、目的の処理タブを選択して切り替えます。左右の矢印ボタンやマウスホイール・ドラッグで横スクロールできます。',
+      descEn: 'Switch between suites like PDF Toolkit, PDF ⇔ Image, Image Studio & Convert, Office & Data Suite, HTML/Markdown Studio, Sign & Stamp, OCR, Diff Studio, ZIP & Rename, and History.',
     },
     {
       targetId: 'mainTabContentArea',
@@ -196,15 +214,37 @@ export default function App() {
     localStorage.setItem('user_lang', newLang);
   };
 
-  const handleDownloadOfflinePack = async () => {
-    showToast(lang === 'ja' ? 'オフラインHTMLを作成中...' : 'Generating offline single file HTML...');
-    try {
-      await downloadOfflinePack();
-      showToast(lang === 'ja' ? 'オフライン用パックを取得しました' : 'Offline Pack Downloaded!');
-      setIsOfflineGuideOpen(true);
-    } catch (e) {
-      showToast(lang === 'ja' ? 'オフラインパックの取得に失敗しました' : 'Failed to generate offline pack');
+  const handleDownloadOfflinePack = () => {
+    setIsOfflinePackModalOpen(true);
+  };
+
+  const handleRestoreBackup = (data: {
+    restoredFiles: FileItem[];
+    activeTab: string;
+    lang: 'ja' | 'en';
+    theme: 'auto' | 'light' | 'dark';
+    historyCount: number;
+  }) => {
+    if (data.restoredFiles && data.restoredFiles.length > 0) {
+      setFileList(data.restoredFiles);
+      if (data.restoredFiles[0].file) {
+        setActiveSharedFile(data.restoredFiles[0].file);
+      }
     }
+    if (data.activeTab) setActiveTab(data.activeTab);
+    if (data.lang) {
+      setLang(data.lang);
+      localStorage.setItem('user_lang', data.lang);
+    }
+    if (data.theme) {
+      setTheme(data.theme);
+      localStorage.setItem('user_theme', data.theme);
+    }
+    showToast(
+      lang === 'ja'
+        ? `バックアップから復元しました（ファイル ${data.restoredFiles.length}件 / 履歴 ${data.historyCount}件）`
+        : `Restored ${data.restoredFiles.length} files and ${data.historyCount} history items`
+    );
   };
 
   const handleShare = async () => {
@@ -218,11 +258,13 @@ export default function App() {
               : '100% Client-Side Universal Media & Document Studio Pro',
           url: window.location.href,
         });
-      } catch (e) {}
-    } else {
-      await navigator.clipboard.writeText(window.location.href);
-      showToast(lang === 'ja' ? 'URLをクリップボードにコピーしました' : 'URL copied to clipboard!');
+        return;
+      } catch (e: any) {
+        if (e?.name === 'AbortError') return;
+      }
     }
+    // For unsupported devices/browsers (desktop, unsupported webviews, etc.), open custom ShareModal
+    setIsShareModalOpen(true);
   };
 
   const handleAgreeFirstLaunch = () => {
@@ -369,20 +411,29 @@ export default function App() {
 
   // Direct Save to Google Drive
   const handleSaveItemToDrive = async (item: FileItem) => {
-    if (!item.resultBlob) return;
-    const token = getStoredToken();
+    const targetBlob = item.resultBlob || item.file;
+    if (!targetBlob) return;
+    let token = getStoredToken();
     if (!token) {
-      showToast(lang === 'ja' ? 'Google Driveと連携してください' : 'Please connect Google Drive first');
-      setIsDriveModalOpen(true);
-      return;
+      try {
+        showToast(lang === 'ja' ? 'Google認証を開いています...' : 'Opening Google Sign-in...');
+        token = await requestGoogleAccessToken();
+      } catch (e: any) {
+        if (e?.code !== 'auth/popup-closed-by-user') {
+          showToast(lang === 'ja' ? 'Google Driveと連携してください' : 'Please connect Google Drive first');
+        }
+        setIsDriveModalOpen(true);
+        return;
+      }
     }
 
-    showToast(lang === 'ja' ? `Google Driveに保存中: ${item.resultName || item.name}...` : `Saving to Google Drive...`);
+    const saveName = item.resultName || item.name;
+    showToast(lang === 'ja' ? `Google Driveに保存中: ${saveName}...` : `Saving to Google Drive...`);
     try {
       const res = await uploadFileToDrive(
-        item.resultName || item.name,
-        item.resultBlob.type || 'application/octet-stream',
-        item.resultBlob
+        saveName,
+        targetBlob.type || 'application/octet-stream',
+        targetBlob
       );
       showToast(
         lang === 'ja'
@@ -435,6 +486,7 @@ export default function App() {
           onDownloadOfflinePack={handleDownloadOfflinePack}
           onOpenTutorial={() => setIsTutorialOpen(true)}
           onShareApp={handleShare}
+          onOpenBackup={() => setIsBackupModalOpen(true)}
         />
 
         {/* 1. Common File Upload Card (At the top of the workflow) */}
@@ -456,19 +508,6 @@ export default function App() {
 
         {/* Tab Contents - Kept mounted persistently so state and inputs are never lost */}
         <main className="w-full" id="mainTabContentArea">
-          <div style={{ display: activeTab === 'converter' ? 'block' : 'none' }}>
-            <UniversalConverter
-              lang={lang}
-              fileList={fileList}
-              setFileList={setFileList}
-              onAddFiles={handleFilesAdded}
-              onPreview={(item) => setPreviewItem(item)}
-              onSaveToDrive={handleSaveItemToDrive}
-              onOpenDrivePicker={() => setIsDriveModalOpen(true)}
-              onOpenHistory={() => setIsHistoryModalOpen(true)}
-            />
-          </div>
-
           <div style={{ display: activeTab === 'pdf-suite' ? 'block' : 'none' }}>
             <PdfSuite
               lang={lang}
@@ -482,6 +521,18 @@ export default function App() {
 
           <div style={{ display: activeTab === 'pdf-image' ? 'block' : 'none' }}>
             <PdfImageSuite
+              lang={lang}
+              sharedFile={activeSharedFile}
+              fileList={fileList}
+              onResultReady={handleResultReady}
+              onAddFiles={handleFilesAdded}
+              onShowToast={showToast}
+            />
+          </div>
+
+
+          <div style={{ display: activeTab === 'image-editor' ? 'block' : 'none' }}>
+            <ImageEditorSuite
               lang={lang}
               sharedFile={activeSharedFile}
               fileList={fileList}
@@ -605,6 +656,7 @@ export default function App() {
           onPreview={(item) => setPreviewItem(item)}
           onSaveToDrive={handleSaveItemToDrive}
           onOpenDrivePicker={() => setIsDriveModalOpen(true)}
+          onOpenBackup={() => setIsBackupModalOpen(true)}
           onShowToast={showToast}
           onClearCache={() => {
             setFileList([]);
@@ -612,77 +664,142 @@ export default function App() {
           }}
         />
 
+        {/* 3. Cross-Device Workspace Backup & Transfer Card (Placed directly under Conversion & Processing Status) */}
+        <div className="card" id="workspaceBackupSection">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold">
+                <ArchiveRestore className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                  <span>{lang === 'ja' ? 'データ引き継ぎ・作業バックアップ' : 'Workspace Transfer & Backup'}</span>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-bold border border-blue-200 dark:border-blue-800 whitespace-nowrap">
+                    {lang === 'ja' ? '端末間引き継ぎ対応' : 'Cross-Device Ready'}
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {lang === 'ja'
+                    ? '現在読み込み中のファイル、変換結果、履歴、HTML/Markdownの編集内容を1つのパッケージにまとめ、スマートフォンや別PCへ即座に引き継げます。'
+                    : 'Package queued files, results, history, and HTML/MD drafts into a single file to continue seamlessly on another device.'}
+                </p>
+              </div>
+            </div>
+
+            {/* Unified 2 Buttons for Backup Operations */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setIsBackupModalOpen(true)}
+                className="btn-sm btn-primary flex items-center gap-1.5 whitespace-nowrap py-2 px-3.5 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{lang === 'ja' ? 'バックアップを作成・保存' : 'Create & Save Backup'}</span>
+              </button>
+
+              <button
+                onClick={() => setIsBackupModalOpen(true)}
+                className="btn-sm btn-secondary flex items-center gap-1.5 whitespace-nowrap py-2 px-3.5 cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5 text-blue-600" />
+                <span>{lang === 'ja' ? 'バックアップを復元・インポート' : 'Restore / Import Backup'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Bottom Features, Environment, How-To, and FAQ Section conforming to Reference HTML */}
         <div className="card" id="featuresSection">
           <div className="info-card-title">{lang === 'ja' ? '本ツールの特徴' : 'Tool Features'}</div>
           <div className="info-box-grid">
             <div className="info-sub-box">
-              <h4>{lang === 'ja' ? '完全ローカル ＆ 完全無制限' : 'Fully Local & Truly Unlimited'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? '完全ローカル ＆ 完全無制限' : 'Fully Local & Truly Unlimited'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'サーバーへファイルをアップロードしない安全設計。容量制限や個数制限なく利用できます。'
+                  ? 'サーバーへファイルをアップロードしない安全設計。容量制限や個数制限なく安心して利用できます。'
                   : 'Secure architecture with zero server uploads. Convert freely without file size or count limitations.'}
               </p>
             </div>
             <div className="info-sub-box">
-              <h4>{lang === 'ja' ? '異種形式の一括ミックス処理' : 'Mixed Format Batch Processing'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? '異種形式の一括ミックス処理' : 'Mixed Format Batch Processing'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'PDF, DOCX, XLSX, MP4, MOV, PNG など異なる拡張子が混在したフォルダも指定形式へ一括で統一変換します。'
-                  : 'Batch-convert folders containing mixed extensions into a single unified format.'}
+                  ? 'PDF, DOCX, XLSX, PNG, JPG, WebP, CSV など異なる拡張子が混在したフォルダも指定形式へ一括で統一処理します。'
+                  : 'Batch-process folders containing mixed extensions into unified output formats seamlessly.'}
               </p>
             </div>
             <div className="info-sub-box">
-              <h4>{lang === 'ja' ? 'オフライン ＆ PWAアプリ対応' : 'Offline & PWA Ready'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? 'オフライン ＆ PWAアプリ対応' : 'Offline & PWA Ready'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'ブラウザ経由で端末へインストール可能。ネットワーク接続がない環境でも動作します。'
+                  ? 'ブラウザ経由で端末へインストール可能。ネットワーク接続がない完全オフライン環境でも動作します。'
                   : 'Installable via browser as a standalone app. Functions completely offline without internet.'}
               </p>
             </div>
             <div className="info-sub-box">
-              <h4>{lang === 'ja' ? '途中停止からの自動復元' : 'Automatic Recovery from Interruptions'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? '途中停止からの自動復元' : 'Automatic Recovery from Interruptions'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'ブラウザの終了やメモリクラッシュ時も、処理済みデータを保存し続きから自動スタートします。'
-                  : 'Saves processed files so you can recover and resume seamlessly after crashes or reloads.'}
+                  ? 'ブラウザの終了や不意のリロード時も、キュー内のデータや編集状態を保持し続きから再開できます。'
+                  : 'Saves queue and draft data so you can recover and resume seamlessly after reloads or crashes.'}
               </p>
             </div>
             <div className="info-sub-box">
-              <h4>{lang === 'ja' ? 'WebMからMP4への超高速・高互換変換' : 'Ultra-Fast WebM to MP4 Conversion'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? 'リアルタイム進捗表示' : 'Real-Time Progress Tracking'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'H.264の -preset ultrafast、-tune zerolatency、-pix_fmt yuv420p を最適適用し、ブラウザ内WASMでのCPU負荷を最小化。フリーズやメモリ不足を根本解消し高速変換を実現します。'
-                  : 'Engineered with libx264 ultrafast preset, zerolatency tuning, and yuv420p standard pixel format for instant high-compatibility MP4s.'}
+                  ? 'ファイル読み込みや各変換処理の進行度を0%〜100%でリアルタイムに可視化。複数ファイルの一括処理時も個別の状況を瞬時に把握できます。'
+                  : 'Track real-time 0%-100% progress for all loading and conversion tasks with individual status indicators.'}
               </p>
             </div>
             <div className="info-sub-box">
-              <h4>{lang === 'ja' ? 'リアルタイム進捗率表示・HTMLプレビュー・メタタグ編集' : 'Real-time Progress, HTML Preview & Metadata'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? 'HTML・Markdown ライブプレビュー & 文書出力' : 'HTML & Markdown Live Preview & Export'}</h4>
               <p>
                 {lang === 'ja'
-                  ? '進行度イベントを常時キャッチし0%〜100%の進捗バーを可視化。HTMLのサンドボックスプレビュー・ソース閲覧やメタタグ編集もすべて端末内で完結します。'
-                  : 'Live progress tracking (0%-100%), interactive HTML sandboxed preview, and direct metadata editing.'}
+                  ? '安全なサンドボックス内でのWebページ表示プレビューやソースコード編集、HTML/MarkdownからPDF・高精細画像・テキストへの変換を端末内完結で実行します。'
+                  : 'Sandboxed live web preview, real-time code editing, and fast export of HTML and Markdown to PDF, PNG, and plain text.'}
+              </p>
+            </div>
+            <div className="info-sub-box">
+              <h4 className="break-keep">{lang === 'ja' ? '電子印鑑・署名・黒塗り & OCR・QR' : 'Sign, Stamp, Redact & OCR / QR'}</h4>
+              <p>
+                {lang === 'ja'
+                  ? '丸印・角印（均等割付）・日付印の即時生成とPDF捺印、手書き署名、機密箇所の黒塗りマスキング、ブラウザ内OCR文字認識、QRコード生成・カメラ読取に対応。'
+                  : 'Instant generation of Japanese stamps, digital signatures, blackout redaction, client-side OCR text extraction, and QR code generation/scanning.'}
+              </p>
+            </div>
+            <div className="info-sub-box">
+              <h4 className="break-keep">{lang === 'ja' ? '文書差分比較 & ZIP一括リネーム' : 'Document Diff & ZIP Archive Toolkit'}</h4>
+              <p>
+                {lang === 'ja'
+                  ? '2つの文書（テキスト・コード・PDF・Word）を行単位・単語単位で高速差分比較しHTMLレポートを出力。複数ファイルのZIP圧縮・解凍・一括リネームも提供します。'
+                  : 'Side-by-side and unified text/document diff comparison with HTML export, plus multi-file ZIP compression, extraction, and batch renaming.'}
               </p>
             </div>
           </div>
 
-          <div className="info-card-title" style={{ marginTop: '18px' }}>
+          <div className="info-card-title break-keep" style={{ marginTop: '18px' }}>
             {lang === 'ja' ? '対応フォーマットおよび動作環境' : 'Supported Formats & System Requirements'}
           </div>
           <div className="info-text-block">
             <span>
               <strong>{lang === 'ja' ? '入力形式: ' : 'Input: '}</strong>
-              PDF, DOCX, XLSX, XLS, CSV, TSV, TXT, MD, HTML, JSON, XML, PNG, JPG, WEBP, SVG, MP4, WEBM, MOV, MP3, WAV, M4A, AAC, OGG ほか多数
+              {lang === 'ja'
+                ? 'PDF, Word (DOCX), Excel (XLSX, XLS), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), テキスト (TXT), 画像 (PNG, JPG, WebP, BMP, SVG, ICO, GIF), ZIP'
+                : 'PDF, Word (DOCX), Excel (XLSX, XLS), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), Plain Text (TXT), Images (PNG, JPG, WebP, BMP, SVG, ICO, GIF), ZIP'}
             </span>
             <br />
             <span>
               <strong>{lang === 'ja' ? '出力形式: ' : 'Output: '}</strong>
-              PDF, DOCX, XLSX, CSV, TSV, TXT, MD, HTML, JSON, PNG, JPG, WEBP, MP4, WEBM, MP3, WAV, ZIP
+              {lang === 'ja'
+                ? 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), テキスト (TXT), 画像 (PNG, JPG, WebP, BMP, ICO), ZIP'
+                : 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), Plain Text (TXT), Images (PNG, JPG, WebP, BMP, ICO), ZIP'}
             </span>
             <br />
             <span>
               <strong>{lang === 'ja' ? '推奨環境: ' : 'Recommended Browsers: '}</strong>
-              Google Chrome, Microsoft Edge, Apple Safari, Mozilla Firefox（最新版）
+              {lang === 'ja'
+                ? 'Google Chrome, Microsoft Edge, Apple Safari, Mozilla Firefox（最新版）'
+                : 'Google Chrome, Microsoft Edge, Apple Safari, Mozilla Firefox (Latest)'}
             </span>
           </div>
 
@@ -1151,6 +1268,38 @@ export default function App() {
         onLoadToActiveStudio={(file) => {
           handleFilesAdded([file]);
         }}
+      />
+
+      {/* Cross-Device Workspace Backup & Restore Modal */}
+      <BackupModal
+        isOpen={isBackupModalOpen}
+        onClose={() => setIsBackupModalOpen(false)}
+        lang={lang}
+        fileList={fileList}
+        activeTab={activeTab}
+        theme={theme}
+        onRestoreBackup={handleRestoreBackup}
+        onShowToast={showToast}
+      />
+
+      {/* Device & OS Selected Offline Pack Modal */}
+      <OfflinePackModal
+        isOpen={isOfflinePackModalOpen}
+        onClose={() => setIsOfflinePackModalOpen(false)}
+        lang={lang}
+        onShowToast={showToast}
+      />
+
+      {/* Custom Cross-Device Share Modal */}
+      <ShareModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        lang={lang}
+        onOpenBackup={() => {
+          setIsShareModalOpen(false);
+          setIsBackupModalOpen(true);
+        }}
+        onShowToast={showToast}
       />
     </div>
   );

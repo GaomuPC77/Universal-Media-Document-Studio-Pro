@@ -25,6 +25,7 @@ interface HeaderProps {
   onDownloadOfflinePack: () => void;
   onOpenTutorial: () => void;
   onShareApp: () => void;
+  onOpenBackup?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -35,6 +36,7 @@ export const Header: React.FC<HeaderProps> = ({
   onDownloadOfflinePack,
   onOpenTutorial,
   onShareApp,
+  onOpenBackup,
 }) => {
   const [currentDateTime, setCurrentDateTime] = useState<string>('--/--/---- --:--:--');
 

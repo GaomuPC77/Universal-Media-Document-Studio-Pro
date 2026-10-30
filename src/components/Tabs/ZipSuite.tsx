@@ -263,14 +263,6 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({
                   : 'View files inside ZIP archives without extracting to disk.'}
               </p>
             </div>
-
-            <button
-              onClick={() => zipInputRef.current?.click()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-xs"
-            >
-              <Upload className="w-3.5 h-3.5" />
-              <span>{lang === 'ja' ? 'ZIPファイルを開く' : 'Open ZIP'}</span>
-            </button>
             <input
               ref={zipInputRef}
               type="file"
@@ -286,25 +278,31 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({
           </div>
 
           {/* Select Loaded ZIP */}
-          {fileList.length > 0 && (
-            <div>
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                {lang === 'ja' ? '読み込み済みZIPファイルから選択:' : 'Select from Loaded ZIPs:'}
-              </label>
-              <select
-                value={selectedZipId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  setSelectedZipId(id);
-                  const found = fileList.find((f) => f.id === id);
-                  if (found && found.file) {
-                    handleSelectZip(found.file);
-                  }
-                }}
-                className="main-select"
-              >
-                <option value="">{lang === 'ja' ? '-- アップロードされたZIPを選択 --' : '-- Select Loaded ZIP --'}</option>
-                {fileList
+          <div>
+            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+              {lang === 'ja' ? '確認対象のZIPファイルを選択:' : 'Select Target ZIP File:'}
+            </label>
+            <select
+              value={selectedZipId}
+              onChange={(e) => {
+                const id = e.target.value;
+                if (id === '__upload_new__') {
+                  zipInputRef.current?.click();
+                  return;
+                }
+                setSelectedZipId(id);
+                const found = fileList.find((f) => f.id === id);
+                if (found && found.file) {
+                  handleSelectZip(found.file);
+                }
+              }}
+              className="main-select"
+            >
+              <option value="">{lang === 'ja' ? '-- アップロードされたZIPを選択 --' : '-- Select Loaded ZIP --'}</option>
+              <option value="__upload_new__">
+                {lang === 'ja' ? '📁 ＋ 新しいZIPを端末からアップロード...' : '📁 + Upload New ZIP File...'}
+              </option>
+              {fileList
                   .filter((f) => f.format === 'zip' || f.name.toLowerCase().endsWith('.zip'))
                   .map((f) => (
                     <option key={f.id} value={f.id}>
@@ -313,7 +311,6 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({
                   ))}
               </select>
             </div>
-          )}
 
           {!zipFile ? (
             <div
@@ -390,14 +387,6 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({
                   : 'Combine any documents and images into a compressed ZIP file.'}
               </p>
             </div>
-
-            <button
-              onClick={() => createInputRef.current?.click()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-xs"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>{lang === 'ja' ? 'ファイルを追加' : 'Add Files'}</span>
-            </button>
             <input
               ref={createInputRef}
               type="file"
@@ -410,6 +399,56 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({
                 }
               }}
             />
+          </div>
+
+          {/* Target File Selector Dropdown */}
+          <div>
+            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+              {lang === 'ja' ? 'ZIPに追加するファイルを選択:' : 'Select Files to Add to ZIP:'}
+            </label>
+            <select
+              value=""
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === '__upload_new__') {
+                  createInputRef.current?.click();
+                  return;
+                }
+                if (val === '__all__') {
+                  const existingNames = new Set(createFiles.map((c) => c.name));
+                  const newItems = fileList
+                    .filter((f) => f.file && !existingNames.has(f.name))
+                    .map((f) => ({ id: `cf_${Date.now()}_${Math.random()}`, file: f.file!, name: f.name, size: f.size }));
+                  setCreateFiles((prev) => [...prev, ...newItems]);
+                  if (onShowToast) onShowToast(lang === 'ja' ? `キューから ${newItems.length} 件のファイルを追加しました` : `Added ${newItems.length} files from queue`);
+                  return;
+                }
+                const found = fileList.find((f) => f.id === val);
+                if (found && found.file) {
+                  setCreateFiles((prev) => {
+                    if (prev.some((item) => item.name === found.name)) return prev;
+                    return [...prev, { id: `cf_${Date.now()}_${Math.random()}`, file: found.file!, name: found.name, size: found.size }];
+                  });
+                  if (onShowToast) onShowToast(lang === 'ja' ? `「${found.name}」を追加しました` : `Added "${found.name}"`);
+                }
+              }}
+              className="main-select"
+            >
+              <option value="">{lang === 'ja' ? '-- アップロードされたファイルを選択してZIPに追加 --' : '-- Select Uploaded File to Add to ZIP --'}</option>
+              <option value="__upload_new__">
+                {lang === 'ja' ? '📁 ＋ 新しいファイルを端末からアップロード...' : '📁 + Upload New Files from Device...'}
+              </option>
+              {fileList.length > 0 && (
+                <option value="__all__">
+                  {lang === 'ja' ? '⚡ キュー内のすべてのファイルを追加' : '⚡ Add All Files in Queue'}
+                </option>
+              )}
+              {fileList.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name} ({(f.size / 1024).toFixed(1)} KB)
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Rename rules if activeTab is rename */}

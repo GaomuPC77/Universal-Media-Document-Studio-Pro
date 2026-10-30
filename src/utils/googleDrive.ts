@@ -1,13 +1,27 @@
 /**
  * Google Drive Client-Side Integration Module
- * Matches the reference Google Identity Services (GIS) and Drive API v3 architecture
+ * Built using Firebase Authentication with GoogleAuthProvider and Google Drive API v3
  */
 
-declare global {
-  interface Window {
-    google?: any;
-  }
-}
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import {
+  getAuth,
+  signInWithPopup,
+  GoogleAuthProvider,
+  onAuthStateChanged,
+  signOut,
+  User,
+} from 'firebase/auth';
+import firebaseConfig from '../../firebase-applet-config.json';
+
+// Initialize Firebase App & Auth
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+export const auth = getAuth(app);
+
+// Provider with Drive file scope
+const provider = new GoogleAuthProvider();
+provider.addScope('https://www.googleapis.com/auth/drive.file');
+provider.setCustomParameters({ prompt: 'select_account' });
 
 export interface DriveFileInfo {
   id: string;
@@ -24,140 +38,179 @@ export interface DriveUser {
   photoLink?: string;
 }
 
-let driveAccessToken: string | null = localStorage.getItem('gdrive_access_token') || null;
-let driveUserInfo: DriveUser | null = null;
-let tokenClient: any = null;
+// In-memory token cache (never stored in localStorage/sessionStorage per security guidelines)
+let cachedAccessToken: string | null = null;
+let cachedDriveUser: DriveUser | null = null;
 let appFolderId: string | null = null;
+let isSigningIn = false;
 
-const DEFAULT_CLIENT_ID = '682605255020-1lc016je2t1lsacm1i4tr5247q3rfi0t.apps.googleusercontent.com';
+type AuthListener = (token: string | null, user: DriveUser | null) => void;
+const authListeners: Set<AuthListener> = new Set();
+
+function notifyListeners() {
+  for (const listener of authListeners) {
+    try {
+      listener(cachedAccessToken, cachedDriveUser);
+    } catch (e) {
+      console.error('Error in auth listener:', e);
+    }
+  }
+}
+
+// Listen to Firebase Auth state
+onAuthStateChanged(auth, async (user: User | null) => {
+  if (user) {
+    if (!cachedDriveUser) {
+      cachedDriveUser = {
+        displayName: user.displayName || undefined,
+        emailAddress: user.email || undefined,
+        photoLink: user.photoURL || undefined,
+      };
+    }
+  } else {
+    cachedAccessToken = null;
+    cachedDriveUser = null;
+    appFolderId = null;
+  }
+  notifyListeners();
+});
 
 export function getStoredToken(): string | null {
-  return driveAccessToken;
+  return cachedAccessToken;
 }
 
 export function getDriveUser(): DriveUser | null {
-  return driveUserInfo;
+  return cachedDriveUser;
+}
+
+export function isDriveConnected(): boolean {
+  return Boolean(cachedAccessToken);
 }
 
 /**
- * Initialize Google Identity Services (GIS)
+ * Initialize Google Drive auth listener
  */
-export async function initGoogleIdentityServices(
+export function initGoogleIdentityServices(
   onTokenReceived?: (token: string, user: DriveUser | null) => void,
   onError?: (err: any) => void
-): Promise<void> {
-  let clientId = DEFAULT_CLIENT_ID;
-
-  try {
-    const res = await fetch('/firebase-applet-config.json');
-    if (res.ok) {
-      const cfg = await res.json();
-      if (cfg && cfg.oAuthClientId) clientId = cfg.oAuthClientId;
+): () => void {
+  const listener: AuthListener = (token, user) => {
+    if (token) {
+      if (onTokenReceived) onTokenReceived(token, user);
     }
-  } catch (e) {}
+  };
 
-  // Load GIS script if not present
-  if (!window.google?.accounts?.oauth2) {
-    if (!document.getElementById('google-gis-script')) {
-      const script = document.createElement('script');
-      script.id = 'google-gis-script';
-      script.src = 'https://accounts.google.com/gsi/client';
-      script.async = true;
-      script.defer = true;
-      document.head.appendChild(script);
-    }
+  authListeners.add(listener);
+
+  if (cachedAccessToken) {
+    if (onTokenReceived) onTokenReceived(cachedAccessToken, cachedDriveUser);
   }
 
-  const checkGisInterval = setInterval(() => {
-    if (window.google?.accounts?.oauth2) {
-      clearInterval(checkGisInterval);
-      try {
-        tokenClient = window.google.accounts.oauth2.initTokenClient({
-          client_id: clientId,
-          scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly',
-          callback: async (tokenResponse: any) => {
-            if (tokenResponse.error) {
-              console.error('GIS OAuth Error:', tokenResponse);
-              if (onError) onError(tokenResponse);
-              return;
-            }
-            driveAccessToken = tokenResponse.access_token;
-            localStorage.setItem('gdrive_access_token', driveAccessToken!);
-            const user = await fetchDriveUserInfo();
-            if (onTokenReceived) onTokenReceived(driveAccessToken!, user);
-          },
-        });
-
-        if (driveAccessToken) {
-          fetchDriveUserInfo().then((user) => {
-            if (onTokenReceived) onTokenReceived(driveAccessToken!, user);
-          });
-        }
-      } catch (err) {
-        console.error('GIS client init error:', err);
-      }
-    }
-  }, 300);
-
-  setTimeout(() => clearInterval(checkGisInterval), 10000);
+  return () => {
+    authListeners.delete(listener);
+  };
 }
 
 /**
- * Request access token popup from Google
+ * Request access token popup from Google via Firebase Auth
  */
-export function requestGoogleAccessToken(onSuccess?: () => void): void {
-  if (!tokenClient) {
-    initGoogleIdentityServices(() => {
-      if (tokenClient) tokenClient.requestAccessToken({ prompt: '' });
-    });
-    return;
+export async function requestGoogleAccessToken(
+  onSuccess?: () => void,
+  onError?: (err: any) => void
+): Promise<string | null> {
+  if (isSigningIn) return cachedAccessToken;
+
+  try {
+    isSigningIn = true;
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (!credential?.accessToken) {
+      throw new Error('Google Drive access token was not returned.');
+    }
+
+    cachedAccessToken = credential.accessToken;
+    cachedDriveUser = {
+      displayName: result.user.displayName || undefined,
+      emailAddress: result.user.email || undefined,
+      photoLink: result.user.photoURL || undefined,
+    };
+
+    // Fetch detailed user info in background
+    fetchDriveUserInfo().catch(() => {});
+
+    notifyListeners();
+    if (onSuccess) onSuccess();
+    return cachedAccessToken;
+  } catch (err: any) {
+    console.error('Google Sign-in Error:', err);
+    if (onError) onError(err);
+    throw err;
+  } finally {
+    isSigningIn = false;
   }
-  tokenClient.requestAccessToken({ prompt: '' });
 }
 
 /**
  * Disconnect and revoke Drive access
  */
-export function disconnectGoogleDrive(): void {
-  if (driveAccessToken && window.google?.accounts?.oauth2?.revoke) {
-    try {
-      window.google.accounts.oauth2.revoke(driveAccessToken, () => {});
-    } catch (e) {}
+export async function disconnectGoogleDrive(): Promise<void> {
+  try {
+    await signOut(auth);
+  } catch (e) {
+    console.warn('Sign out error:', e);
   }
-  driveAccessToken = null;
-  driveUserInfo = null;
-  localStorage.removeItem('gdrive_access_token');
+  cachedAccessToken = null;
+  cachedDriveUser = null;
+  appFolderId = null;
+  notifyListeners();
 }
 
 /**
  * Fetch current Google Drive user information
  */
 export async function fetchDriveUserInfo(): Promise<DriveUser | null> {
-  if (!driveAccessToken) return null;
+  if (!cachedAccessToken) {
+    if (auth.currentUser) {
+      cachedDriveUser = {
+        displayName: auth.currentUser.displayName || undefined,
+        emailAddress: auth.currentUser.email || undefined,
+        photoLink: auth.currentUser.photoURL || undefined,
+      };
+      return cachedDriveUser;
+    }
+    return null;
+  }
+
   try {
     const res = await fetch('https://www.googleapis.com/drive/v3/about?fields=user', {
-      headers: { Authorization: `Bearer ${driveAccessToken}` },
+      headers: { Authorization: `Bearer ${cachedAccessToken}` },
     });
     if (res.ok) {
       const data = await res.json();
-      driveUserInfo = data.user;
-      return driveUserInfo;
+      if (data.user) {
+        cachedDriveUser = {
+          displayName: data.user.displayName,
+          emailAddress: data.user.emailAddress,
+          photoLink: data.user.photoLink,
+        };
+        return cachedDriveUser;
+      }
     } else if (res.status === 401) {
-      driveAccessToken = null;
-      driveUserInfo = null;
-      localStorage.removeItem('gdrive_access_token');
+      cachedAccessToken = null;
+      notifyListeners();
     }
   } catch (e) {
-    console.warn('Drive about check error:', e);
+    console.warn('Drive about fetch error:', e);
   }
-  return null;
+
+  return cachedDriveUser;
 }
 
 /**
  * Fetch files from Google Drive
  */
 export async function fetchDriveFiles(searchQuery: string = ''): Promise<DriveFileInfo[]> {
-  if (!driveAccessToken) {
+  if (!cachedAccessToken) {
     throw new Error('Google Drive is not connected');
   }
 
@@ -191,13 +244,13 @@ export async function fetchDriveFiles(searchQuery: string = ''): Promise<DriveFi
   )}&orderBy=modifiedTime desc`;
 
   const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${driveAccessToken}` },
+    headers: { Authorization: `Bearer ${cachedAccessToken}` },
   });
 
   if (!res.ok) {
     if (res.status === 401) {
-      driveAccessToken = null;
-      localStorage.removeItem('gdrive_access_token');
+      cachedAccessToken = null;
+      notifyListeners();
       throw new Error('AUTH_EXPIRED');
     }
     throw new Error(`Drive API error: ${res.statusText}`);
@@ -218,10 +271,10 @@ export async function fetchDriveFiles(searchQuery: string = ''): Promise<DriveFi
  * Download single file from Google Drive into a File object
  */
 export async function downloadDriveFile(fileInfo: DriveFileInfo): Promise<File> {
-  if (!driveAccessToken) throw new Error('Not connected');
+  if (!cachedAccessToken) throw new Error('Not connected');
 
   const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileInfo.id}?alt=media`, {
-    headers: { Authorization: `Bearer ${driveAccessToken}` },
+    headers: { Authorization: `Bearer ${cachedAccessToken}` },
   });
 
   if (!res.ok) throw new Error(`Download failed with status ${res.status}`);
@@ -236,12 +289,12 @@ export async function downloadDriveFile(fileInfo: DriveFileInfo): Promise<File> 
  */
 async function getOrCreateAppFolder(): Promise<string | null> {
   if (appFolderId) return appFolderId;
-  if (!driveAccessToken) return null;
+  if (!cachedAccessToken) return null;
 
   try {
     const q = "name = 'Universal Document Studio' and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
     const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`, {
-      headers: { Authorization: `Bearer ${driveAccessToken}` },
+      headers: { Authorization: `Bearer ${cachedAccessToken}` },
     });
     if (res.ok) {
       const data = await res.json();
@@ -254,7 +307,7 @@ async function getOrCreateAppFolder(): Promise<string | null> {
     const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${driveAccessToken}`,
+        Authorization: `Bearer ${cachedAccessToken}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -281,10 +334,16 @@ export async function uploadFileToDrive(
   mimeType: string,
   dataBuffer: ArrayBuffer | Uint8Array | Blob
 ): Promise<{ id: string; name: string; webViewLink?: string }> {
-  if (!driveAccessToken) throw new Error('Google Drive is not connected');
+  if (!cachedAccessToken) throw new Error('Google Drive is not connected');
 
-  const folderId = await getOrCreateAppFolder();
-  const metadata: any = {
+  let folderId: string | null = null;
+  try {
+    folderId = await getOrCreateAppFolder();
+  } catch (err) {
+    console.warn('Could not retrieve folder, uploading to root:', err);
+  }
+
+  const metadata: Record<string, any> = {
     name: fileName,
     mimeType: mimeType || 'application/octet-stream',
   };
@@ -310,20 +369,47 @@ export async function uploadFileToDrive(
 
   const multipartBody = new Blob([metaBlob, fileHeaderBlob, dataBlob, closeBlob]);
 
-  const uploadRes = await fetch(
+  let uploadRes = await fetch(
     'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
     {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${driveAccessToken}`,
+        Authorization: `Bearer ${cachedAccessToken}`,
         'Content-Type': `multipart/related; boundary=${boundary}`,
       },
       body: multipartBody,
     }
   );
 
+  // If folder parent caused error (e.g., 404 or folder not writable), retry upload to root
+  if (!uploadRes.ok && folderId) {
+    console.warn('Upload with parent folder failed, retrying upload to root directory...');
+    delete metadata.parents;
+    const retryMetaPart =
+      delimiter +
+      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify(metadata);
+    const retryMultipartBody = new Blob([new Blob([retryMetaPart]), fileHeaderBlob, dataBlob, closeBlob]);
+    uploadRes = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${cachedAccessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+        },
+        body: retryMultipartBody,
+      }
+    );
+  }
+
   if (!uploadRes.ok) {
-    throw new Error(`Drive upload failed: ${uploadRes.status} ${uploadRes.statusText}`);
+    if (uploadRes.status === 401) {
+      cachedAccessToken = null;
+      notifyListeners();
+    }
+    const errText = await uploadRes.text().catch(() => '');
+    throw new Error(`Drive upload failed (${uploadRes.status}): ${errText || uploadRes.statusText}`);
   }
 
   return await uploadRes.json();

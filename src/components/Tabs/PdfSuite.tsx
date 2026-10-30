@@ -519,57 +519,77 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({
         }}
       />
 
-      {/* Global Queue File Selection & Multi-select Bar */}
-      {fileList.length > 0 && (
-        <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2">
-            <Layers className="w-3.5 h-3.5 text-blue-600" />
-            <span className="font-bold text-slate-700 dark:text-slate-300">
-              {lang === 'ja' ? '読み込み済みPDFから選択:' : 'Select Loaded PDF:'}
-            </span>
-            <select
-              value={currentFile?.name || ''}
-              onChange={(e) => {
-                const found = fileList.find((f) => f.name === e.target.value);
-                if (found && found.file) {
-                  handleLoadPdf(found.file);
-                }
-              }}
-              className="main-select text-xs py-1"
-            >
-              <option value="">{lang === 'ja' ? '-- PDFを選択 --' : '-- Choose PDF --'}</option>
-              {fileList
-                .filter((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'))
-                .map((f) => (
-                  <option key={f.id} value={f.name}>
-                    {f.name} ({(f.size / 1024).toFixed(1)} KB)
-                  </option>
-                ))}
-            </select>
-          </div>
-
-          {activeSubTab === 'merge' && (
-            <button
-              onClick={() => {
-                const pdfs = fileList.filter((f) => (f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf')) && f.file);
-                if (pdfs.length > 0) {
-                  const newItems = pdfs.map((f) => ({ id: `m_${f.id}`, file: f.file!, name: f.name, size: f.size }));
-                  setMergeFiles((prev) => {
-                    const existingNames = new Set(prev.map((p) => p.name));
-                    const unique = newItems.filter((item) => !existingNames.has(item.name));
-                    return [...prev, ...unique];
-                  });
-                  if (onShowToast) onShowToast(lang === 'ja' ? `読み込み済みPDF ${pdfs.length}件を結合リストに追加しました` : `Added ${pdfs.length} loaded PDFs to merge list`);
-                }
-              }}
-              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-1.5 shadow-xs"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>{lang === 'ja' ? 'キューのPDFを一括結合に追加' : 'Add All Loaded PDFs to Merge'}</span>
-            </button>
-          )}
+      {/* Unified Target PDF Selector Bar - Always visible across all subtabs */}
+      <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-0 w-full sm:w-auto">
+          <Layers className="w-4 h-4 text-blue-600 shrink-0" />
+          <span className="font-bold text-slate-700 dark:text-slate-300 whitespace-nowrap">
+            {lang === 'ja' ? '変換対象のPDFファイルを選択:' : 'Select Target PDF File:'}
+          </span>
+          <select
+            value={currentFile?.name || ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val === '__upload_new__') {
+                fileInputRef.current?.click();
+                return;
+              }
+              const found = fileList.find((f) => f.name === val);
+              if (found && found.file) {
+                handleLoadPdf(found.file);
+              }
+            }}
+            className="main-select text-xs py-1.5 flex-1 min-w-0 mb-0"
+          >
+            <option value="">{lang === 'ja' ? '-- アップロードされたPDFを選択 --' : '-- Select Uploaded PDF --'}</option>
+            <option value="__upload_new__">
+              {lang === 'ja' ? '📁 ＋ 新しいPDFを端末からアップロード...' : '📁 + Upload New PDF File...'}
+            </option>
+            {fileList
+              .filter((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'))
+              .map((f) => (
+                <option key={f.id} value={f.name}>
+                  {f.name} ({(f.size / 1024).toFixed(1)} KB)
+                </option>
+              ))}
+          </select>
         </div>
-      )}
+
+        {activeSubTab === 'merge' && fileList.length > 0 && (
+          <button
+            onClick={() => {
+              const pdfs = fileList.filter((f) => (f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf')) && f.file);
+              if (pdfs.length > 0) {
+                const newItems = pdfs.map((f) => ({ id: `m_${f.id}`, file: f.file!, name: f.name, size: f.size }));
+                setMergeFiles((prev) => {
+                  const existingNames = new Set(prev.map((p) => p.name));
+                  const unique = newItems.filter((item) => !existingNames.has(item.name));
+                  return [...prev, ...unique];
+                });
+                if (onShowToast) onShowToast(lang === 'ja' ? `読み込み済みPDF ${pdfs.length}件を結合リストに追加しました` : `Added ${pdfs.length} loaded PDFs to merge list`);
+              }
+            }}
+            className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-1.5 shadow-xs whitespace-nowrap"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>{lang === 'ja' ? 'キューのPDFを一括結合に追加' : 'Add All Loaded PDFs to Merge'}</span>
+          </button>
+        )}
+      </div>
+
+      {/* Shared hidden PDF input for single-file subtabs */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/pdf"
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files && e.target.files[0]) {
+            setPendingPromptFile({ file: e.target.files[0], mode: 'organize' });
+            e.target.value = '';
+          }
+        }}
+      />
 
       {/* 1. Page Organizer / Delete / Rotate Tab */}
       {activeSubTab === 'organize' && (
@@ -579,18 +599,6 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({
               onClick={() => fileInputRef.current?.click()}
               className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 rounded-2xl p-10 flex flex-col items-center justify-center text-center cursor-pointer bg-white/60 dark:bg-slate-900/60 transition"
             >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="application/pdf"
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files && e.target.files[0]) {
-                    setPendingPromptFile({ file: e.target.files[0], mode: 'organize' });
-                    e.target.value = '';
-                  }
-                }}
-              />
               <div className="w-14 h-14 rounded-2xl bg-blue-100 dark:bg-blue-950 text-blue-600 flex items-center justify-center mb-3">
                 <FileText className="w-7 h-7" />
               </div>
@@ -648,8 +656,8 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({
               <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-600 dark:text-slate-300 flex items-center justify-between">
                 <span>
                   {lang === 'ja'
-                    ? '💡 サムネイルをクリックすると「削除対象」としてマーク/解除できます。回転アイコンで個別回転も可能です。'
-                    : '💡 Click any thumbnail to mark/unmark for deletion. Use the rotate icon on cards for individual rotation.'}
+                    ? 'サムネイルをクリックすると「削除対象」としてマーク/解除できます。回転アイコンで個別回転も可能です。'
+                    : 'Click any thumbnail to mark/unmark for deletion. Use the rotate icon on cards for individual rotation.'}
                 </span>
                 {selectedPages.size > 0 && (
                   <button

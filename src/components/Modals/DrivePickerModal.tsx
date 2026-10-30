@@ -106,9 +106,30 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleConnect = () => {
+  const handleConnect = async () => {
     setErrorMessage(null);
-    requestGoogleAccessToken();
+    try {
+      await requestGoogleAccessToken(
+        async () => {
+          setIsConnected(true);
+          const user = await fetchDriveUserInfo();
+          if (user) setDriveUser(user);
+          await loadFiles();
+        },
+        (err) => {
+          console.error('Google Auth error in Modal:', err);
+          setErrorMessage(
+            lang === 'ja'
+              ? 'Google認証に失敗しました。ポップアップのブロックを解除してください。'
+              : 'Authentication failed. Please check popup blockers.'
+          );
+        }
+      );
+    } catch (e: any) {
+      if (e?.code !== 'auth/popup-closed-by-user') {
+        setErrorMessage(e.message || (lang === 'ja' ? 'Google認証に失敗しました' : 'Authentication failed'));
+      }
+    }
   };
 
   const handleDisconnect = () => {
@@ -172,21 +193,50 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
     }
   };
 
-  const getFilteredFiles = () => {
-    return files.filter((f) => {
-      const ext = f.name.split('.').pop()?.toLowerCase() || '';
-      if (filterExt !== 'all') {
-        if (filterExt === 'pdf' && ext !== 'pdf') return false;
-        if (filterExt === 'office' && !['docx', 'doc', 'xlsx', 'xls', 'pptx', 'csv'].includes(ext)) return false;
-        if (filterExt === 'images' && !['png', 'jpg', 'jpeg', 'webp', 'svg', 'gif'].includes(ext)) return false;
-        if (filterExt === 'media' && !['mp4', 'webm', 'mov', 'mp3', 'wav', 'm4a', 'aac', 'ogg'].includes(ext)) return false;
-      }
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        if (!f.name.toLowerCase().includes(q)) return false;
-      }
+  const isGoogleWorkspaceNative = (f: DriveFileInfo) => {
+    if (!f.mimeType) return false;
+    if (f.mimeType.startsWith('application/vnd.google-apps.') && f.mimeType !== 'application/vnd.google-apps.file') {
       return true;
-    });
+    }
+    const ext = f.name.includes('.') ? f.name.split('.').pop()?.toLowerCase() || '' : '';
+    const knownExts = ['pdf','docx','doc','xlsx','xls','pptx','ppt','csv','tsv','txt','md','html','json','xml','png','jpg','jpeg','webp','svg','gif','bmp','ico','mp4','webm','mov','mp3','wav','m4a','aac','ogg','zip','rar','7z'];
+    if (!ext || !knownExts.includes(ext)) {
+      if (!ext && f.mimeType.includes('google')) return true;
+    }
+    return false;
+  };
+
+  const getGoogleNativeTypeName = (f: DriveFileInfo) => {
+    const mime = (f.mimeType || '').toLowerCase();
+    if (mime.includes('document')) return lang === 'ja' ? 'Google ドキュメント' : 'Google Docs';
+    if (mime.includes('spreadsheet')) return lang === 'ja' ? 'Google スプレッドシート' : 'Google Sheets';
+    if (mime.includes('presentation')) return lang === 'ja' ? 'Google スライド' : 'Google Slides';
+    if (mime.includes('form')) return lang === 'ja' ? 'Google フォーム' : 'Google Forms';
+    if (mime.includes('drawing')) return lang === 'ja' ? 'Google 図形描画' : 'Google Drawings';
+    return lang === 'ja' ? 'Google専用形式 (拡張子なし)' : 'Google Cloud Native';
+  };
+
+  const getFilteredFiles = () => {
+    return files
+      .filter((f) => !isGoogleWorkspaceNative(f))
+      .filter((f) => {
+        const ext = f.name.split('.').pop()?.toLowerCase() || '';
+        if (filterExt !== 'all') {
+          if (filterExt === 'pdf' && ext !== 'pdf') return false;
+          if (filterExt === 'office' && !['docx', 'doc', 'xlsx', 'xls', 'pptx', 'csv'].includes(ext)) return false;
+          if (filterExt === 'images' && !['png', 'jpg', 'jpeg', 'webp', 'svg', 'gif'].includes(ext)) return false;
+          if (filterExt === 'media' && !['mp4', 'webm', 'mov', 'mp3', 'wav', 'm4a', 'aac', 'ogg'].includes(ext)) return false;
+        }
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          if (!f.name.toLowerCase().includes(q)) return false;
+        }
+        return true;
+      });
+  };
+
+  const getUnsupportedWorkspaceFiles = () => {
+    return files.filter((f) => isGoogleWorkspaceNative(f));
   };
 
   const formatFileSize = (bytes?: number) => {
@@ -208,6 +258,7 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
   };
 
   const filteredFiles = getFilteredFiles();
+  const unsupportedFiles = getUnsupportedWorkspaceFiles();
 
   return (
     <div className="modal-overlay" style={{ display: 'flex' }}>
@@ -382,6 +433,43 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                       </div>
                     );
                   })
+                )}
+
+                {/* Unsupported Google Workspace native documents section placed at bottom */}
+                {unsupportedFiles.length > 0 && (
+                  <div style={{ marginTop: '14px', borderTop: '1px dashed var(--border-color)', paddingTop: '10px' }}>
+                    <div style={{ fontSize: '0.78rem', color: '#b45309', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '4px' }}>
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{lang === 'ja' ? '直接変換非対応のGoogle専用形式ファイル（ドキュメント・スプレッドシート等）' : 'Unsupported Google-Native Files (Docs, Sheets, Slides)'}</span>
+                    </div>
+                    <p style={{ fontSize: '0.72rem', color: 'var(--text-sub)', marginBottom: '8px', lineHeight: 1.4 }}>
+                      {lang === 'ja'
+                        ? '※ Googleドキュメント / スプレッドシート / スライド等のGoogle専用形式は直接変換に対応していません。Googleドライブ上で「ファイル」→「ダウンロード」からPDFやDOCX等に保存してご利用ください。'
+                        : 'Note: Native Google Docs, Sheets, and Slides cannot be directly converted. Please export them as PDF or DOCX from Google Drive first.'}
+                    </p>
+                    <div style={{ opacity: 0.65, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {unsupportedFiles.map((u) => (
+                        <div
+                          key={u.id}
+                          className="drive-file-item"
+                          style={{ cursor: 'not-allowed', background: 'rgba(0,0,0,0.03)' }}
+                        >
+                          <input type="checkbox" disabled checked={false} />
+                          <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                            <FileText className="w-4 h-4 text-slate-400" />
+                          </span>
+                          <div className="drive-file-info">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span className="drive-file-name" style={{ color: 'var(--text-sub)' }}>{u.name}</span>
+                              <span style={{ fontSize: '0.65rem', fontWeight: 600, padding: '1px 6px', borderRadius: '4px', background: '#fef08a', color: '#854d0e', whiteSpace: 'nowrap' }}>
+                                {getGoogleNativeTypeName(u)} - {lang === 'ja' ? '直接変換非対応' : 'Cannot Convert'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

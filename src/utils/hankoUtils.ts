@@ -82,7 +82,7 @@ export function generateHankoImage(config: HankoConfig): string {
       ctx.fillText(text, center, center);
     }
   } else if (config.type === 'square') {
-    // Square Seal (角印)
+    // Square Seal (角印) - Evenly distributed vertical text (均等割付)
     const margin = borderWidth;
     const rectSize = size - margin * 2;
     const radius = 8;
@@ -96,21 +96,48 @@ export function generateHankoImage(config: HankoConfig): string {
 
     const text = config.text.trim();
     const chars = text.split('');
-    const cols = Math.ceil(Math.sqrt(chars.length));
-    const rows = Math.ceil(chars.length / cols);
-    const fontSize = Math.min((rectSize * 0.8) / Math.max(cols, rows), size * 0.25);
+    if (chars.length === 0) return;
 
+    // Determine number of columns (right-to-left)
+    const cols = Math.max(1, Math.ceil(Math.sqrt(chars.length)));
+
+    // Distribute characters into columns (rightmost columns receive remainder chars first)
+    const baseCount = Math.floor(chars.length / cols);
+    const remainder = chars.length % cols;
+    const columns: string[][] = [];
+    let curIdx = 0;
+
+    for (let c = 0; c < cols; c++) {
+      const countForCol = baseCount + (c < remainder ? 1 : 0);
+      columns.push(chars.slice(curIdx, curIdx + countForCol));
+      curIdx += countForCol;
+    }
+
+    const maxCharsInAnyCol = Math.max(...columns.map((c) => c.length), 1);
+    const maxDim = Math.max(cols, maxCharsInAnyCol);
+    const fontSize = Math.min((rectSize * 0.78) / maxDim, size * 0.28);
     ctx.font = `bold ${fontSize}px ${fontFamily}`;
 
-    // Render characters vertically right-to-left
-    let charIndex = 0;
-    for (let c = cols - 1; c >= 0; c--) {
-      for (let r = 0; r < rows; r++) {
-        if (charIndex < chars.length) {
-          const x = margin + rectSize * 0.15 + (c / Math.max(cols - 1, 1)) * (rectSize * 0.7);
-          const y = margin + rectSize * 0.15 + (r / Math.max(rows - 1, 1)) * (rectSize * 0.7);
-          ctx.fillText(chars[charIndex], cols === 1 ? center : x, rows === 1 ? center : y);
-          charIndex++;
+    const usableW = rectSize * 0.76;
+    const usableH = rectSize * 0.76;
+    const leftX = margin + (rectSize - usableW) / 2;
+    const topY = margin + (rectSize - usableH) / 2;
+
+    // Render columns from right to left (c = 0 is rightmost column)
+    for (let c = 0; c < cols; c++) {
+      const colChars = columns[c];
+      const colIdxFromLeft = cols - 1 - c;
+      const x = cols === 1 ? center : leftX + (colIdxFromLeft + 0.5) * (usableW / cols);
+      const k = colChars.length;
+      if (k === 0) continue;
+
+      if (k === 1) {
+        ctx.fillText(colChars[0], x, center);
+      } else {
+        // Vertical justification (均等割付) for characters in this column
+        for (let r = 0; r < k; r++) {
+          const y = topY + (r + 0.5) * (usableH / k);
+          ctx.fillText(colChars[r], x, y);
         }
       }
     }

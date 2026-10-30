@@ -21,6 +21,14 @@ import {
   ExternalLink,
   Layers,
   Plus,
+  RotateCcw,
+  History,
+  Save,
+  Clock,
+  X,
+  Search,
+  ArrowDown,
+  ArrowUp,
 } from 'lucide-react';
 import { saveProcessedFile } from '../../utils/historyDb';
 import { parseMarkdownToHtml } from '../../utils/markdownUtils';
@@ -67,6 +75,7 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
   const [docType, setDocType] = useState<'html' | 'markdown'>('html');
   const [codeContent, setCodeContent] = useState<string>(DEFAULT_SIMPLE_HTML);
   const [fileName, setFileName] = useState<string>('document.html');
+  const [lastSavedTime, setLastSavedTime] = useState<string>('');
   const [selectedQueueFileId, setSelectedQueueFileId] = useState<string>('');
   const [selectedQueueFileIds, setSelectedQueueFileIds] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<'split' | 'code' | 'preview'>('split');
@@ -77,6 +86,147 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
   const [pendingPromptFile, setPendingPromptFile] = useState<File | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Find & Replace state
+  const [showFindReplace, setShowFindReplace] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [replaceQuery, setReplaceQuery] = useState('');
+  const [isCaseSensitive, setIsCaseSensitive] = useState(false);
+  const [currentMatchIdx, setCurrentMatchIdx] = useState(0);
+
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historySnapshots, setHistorySnapshots] = useState<Array<{
+    id: string;
+    timestamp: number;
+    docType: 'html' | 'markdown';
+    fileName: string;
+    content: string;
+    snippet: string;
+  }>>([]);
+
+  // Load snapshots from localStorage
+  const loadSnapshotsFromStorage = () => {
+    try {
+      const raw = localStorage.getItem('umc_html_studio_snapshots');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setHistorySnapshots(parsed);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse html studio snapshots:', e);
+    }
+  };
+
+  // Restore HTML/Markdown content from localStorage on mount or when backup restored
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('umc_html_studio_content');
+      const savedType = localStorage.getItem('umc_html_studio_doctype') as 'html' | 'markdown' | null;
+      const savedName = localStorage.getItem('umc_html_studio_filename');
+      const savedTime = localStorage.getItem('umc_html_studio_updated_at');
+
+      if (saved !== null && saved !== undefined) {
+        setCodeContent(saved);
+        if (savedType) setDocType(savedType);
+        if (savedName) setFileName(savedName);
+        if (savedTime) {
+          const d = new Date(parseInt(savedTime, 10));
+          setLastSavedTime(d.toLocaleTimeString());
+        }
+      }
+      loadSnapshotsFromStorage();
+    } catch (e) {
+      console.warn('Could not restore HTML studio draft from localStorage:', e);
+    }
+
+    const handleDraftRestored = () => {
+      try {
+        const saved = localStorage.getItem('umc_html_studio_content');
+        const savedType = localStorage.getItem('umc_html_studio_doctype') as 'html' | 'markdown' | null;
+        const savedName = localStorage.getItem('umc_html_studio_filename');
+        if (saved !== null && saved !== undefined) setCodeContent(saved);
+        if (savedType) setDocType(savedType);
+        if (savedName) setFileName(savedName);
+        setLastSavedTime(new Date().toLocaleTimeString());
+        loadSnapshotsFromStorage();
+      } catch (e) {}
+    };
+
+    window.addEventListener('umc_html_draft_restored', handleDraftRestored);
+    return () => window.removeEventListener('umc_html_draft_restored', handleDraftRestored);
+  }, []);
+
+  // Debounced auto-save to localStorage & periodic snapshot
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem('umc_html_studio_content', codeContent);
+        localStorage.setItem('umc_html_studio_doctype', docType);
+        localStorage.setItem('umc_html_studio_filename', fileName);
+        const now = Date.now();
+        localStorage.setItem('umc_html_studio_updated_at', String(now));
+        setLastSavedTime(new Date(now).toLocaleTimeString());
+
+        // Save snapshot if meaningful content and changed
+        if (codeContent && codeContent.trim().length > 10) {
+          try {
+            const raw = localStorage.getItem('umc_html_studio_snapshots');
+            const list: Array<any> = raw ? JSON.parse(raw) : [];
+            const lastOne = list[0];
+            // Only add snapshot if content is different from last snapshot
+            if (!lastOne || lastOne.content !== codeContent) {
+              const snippet = codeContent.trim().substring(0, 100).replace(/\s+/g, ' ');
+              const updated = [
+                {
+                  id: `snap_${now}`,
+                  timestamp: now,
+                  docType,
+                  fileName,
+                  content: codeContent,
+                  snippet,
+                },
+                ...list.filter((s: any) => s.content !== codeContent),
+              ].slice(0, 15); // keep last 15 versions
+              localStorage.setItem('umc_html_studio_snapshots', JSON.stringify(updated));
+              setHistorySnapshots(updated);
+            }
+          } catch (e) {}
+        }
+      } catch (e) {
+        console.warn('Auto-save to localStorage failed:', e);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [codeContent, docType, fileName]);
+
+  // Restore snapshot
+  const handleRestoreSnapshot = (snap: { docType: 'html' | 'markdown'; fileName: string; content: string }) => {
+    setCodeContent(snap.content);
+    setDocType(snap.docType);
+    setFileName(snap.fileName);
+    setShowHistoryModal(false);
+    if (onShowToast) {
+      onShowToast(lang === 'ja' ? 'ローカル履歴から復元しました' : 'Restored from local version history');
+    }
+  };
+
+  // Reset to default template
+  const handleResetToTemplate = () => {
+    if (docType === 'markdown') {
+      setCodeContent(DEFAULT_SIMPLE_MD);
+      setFileName('document.md');
+    } else {
+      setCodeContent(DEFAULT_SIMPLE_HTML);
+      setFileName('document.html');
+    }
+    if (onShowToast) {
+      onShowToast(lang === 'ja' ? '初期テンプレートに戻しました' : 'Reset to template');
+    }
+  };
 
   // Switch docType
   const handleSwitchDocType = (type: 'html' | 'markdown') => {
@@ -133,6 +283,75 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
       }
     };
     reader.readAsText(file);
+  };
+
+  // Find & Replace match finding
+  const getFindMatches = () => {
+    if (!findQuery) return [];
+    const source = isCaseSensitive ? codeContent : codeContent.toLowerCase();
+    const target = isCaseSensitive ? findQuery : findQuery.toLowerCase();
+    const indices: number[] = [];
+    let pos = 0;
+    while ((pos = source.indexOf(target, pos)) !== -1) {
+      indices.push(pos);
+      pos += target.length;
+    }
+    return indices;
+  };
+
+  const handleFindNext = () => {
+    const matches = getFindMatches();
+    if (matches.length === 0) return;
+    const next = (currentMatchIdx + 1) % matches.length;
+    setCurrentMatchIdx(next);
+    const start = matches[next];
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.setSelectionRange(start, start + findQuery.length);
+    }
+  };
+
+  const handleFindPrev = () => {
+    const matches = getFindMatches();
+    if (matches.length === 0) return;
+    const prev = (currentMatchIdx - 1 + matches.length) % matches.length;
+    setCurrentMatchIdx(prev);
+    const start = matches[prev];
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.setSelectionRange(start, start + findQuery.length);
+    }
+  };
+
+  const handleReplaceNext = () => {
+    if (!findQuery) return;
+    const matches = getFindMatches();
+    if (matches.length === 0) {
+      if (onShowToast) onShowToast(lang === 'ja' ? '一致する文字列がありません' : 'No matches found');
+      return;
+    }
+    const idx = matches[currentMatchIdx % matches.length];
+    const updated = codeContent.substring(0, idx) + replaceQuery + codeContent.substring(idx + findQuery.length);
+    setCodeContent(updated);
+    if (onShowToast) onShowToast(lang === 'ja' ? '1箇所を置換しました' : 'Replaced 1 match');
+  };
+
+  const handleReplaceAll = () => {
+    if (!findQuery) return;
+    const matches = getFindMatches();
+    if (matches.length === 0) {
+      if (onShowToast) onShowToast(lang === 'ja' ? '一致する文字列がありません' : 'No matches found');
+      return;
+    }
+    let updated = '';
+    if (isCaseSensitive) {
+      updated = codeContent.split(findQuery).join(replaceQuery);
+    } else {
+      const escaped = findQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      updated = codeContent.replace(new RegExp(escaped, 'gi'), replaceQuery);
+    }
+    setCodeContent(updated);
+    if (onShowToast) onShowToast(lang === 'ja' ? `${matches.length} 箇所をすべて置換しました` : `Replaced all ${matches.length} matches`);
   };
 
   // Handle local upload - prompts user whether to add to global queue
@@ -433,6 +652,74 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
     }
   };
 
+  const handleExportImage = async () => {
+    setIsExportingPdf(true);
+    if (onShowToast) {
+      onShowToast(lang === 'ja' ? '高精細画像を生成中...' : 'Generating Image...');
+    }
+
+    try {
+      const renderHtml = getRenderedHtml();
+      const renderContainer = document.createElement('div');
+      renderContainer.style.position = 'fixed';
+      renderContainer.style.left = '-9999px';
+      renderContainer.style.top = '0';
+      renderContainer.style.width = '960px';
+      renderContainer.style.background = '#ffffff';
+      renderContainer.style.color = '#000000';
+      renderContainer.innerHTML = renderHtml;
+      document.body.appendChild(renderContainer);
+
+      const canvas = await html2canvas(renderContainer, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+      });
+      document.body.removeChild(renderContainer);
+
+      canvas.toBlob(async (blob) => {
+        if (!blob) return;
+        const imgName = `${fileName.replace(/\.[^/.]+$/, '')}.png`;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = imgName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        const arrayBuffer = await blob.arrayBuffer();
+        await saveProcessedFile(`img_${Date.now()}`, fileName, imgName, arrayBuffer, 'png', { source: docType });
+
+        if (onResultReady) {
+          onResultReady({
+            id: `res_htmlimg_${Date.now()}`,
+            name: imgName,
+            file: new File([blob], imgName, { type: 'image/png' }),
+            size: blob.size,
+            type: 'image/png',
+            format: 'png',
+            targetFormat: 'png',
+            status: 'done',
+            progress: 100,
+            resultBlob: blob,
+            resultName: imgName,
+          });
+        }
+
+        if (onShowToast) {
+          onShowToast(lang === 'ja' ? '画像(PNG)をエクスポートしました' : 'Exported image successfully');
+        }
+      }, 'image/png');
+    } catch (e: any) {
+      console.error('Image export error:', e);
+      alert(lang === 'ja' ? '画像の生成に失敗しました' : 'Failed to export image');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
   const handleExtractText = () => {
     let plainText = codeContent;
     if (docType === 'html') {
@@ -536,11 +823,34 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
                   ? 'HTMLおよびMarkdownのリアルタイム編集、安全なサンドボックスプレビュー、PDF書き出しを端末内で完結。'
                   : 'Real-time HTML & Markdown editing, sandboxed live preview, and PDF export.'}
               </p>
+              {lastSavedTime && (
+                <div className="flex items-center gap-1.5 mt-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+                  <Check className="w-3 h-3" />
+                  <span>{lang === 'ja' ? `端末内ローカル保存中 (最終保存: ${lastSavedTime})` : `Autosaved locally (${lastSavedTime})`}</span>
+                </div>
+              )}
             </div>
           </div>
 
           {/* Quick Actions */}
           <div className="flex items-center flex-wrap gap-2">
+            <button
+              onClick={() => {
+                loadSnapshotsFromStorage();
+                setShowHistoryModal(true);
+              }}
+              className="btn-header border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 bg-blue-50/50 dark:bg-blue-950/30"
+              title={lang === 'ja' ? 'ローカル保存履歴・いつでも復元' : 'Restore from Local Storage / History'}
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-blue-600" />
+              <span>{lang === 'ja' ? 'ローカル復元' : 'Restore'}</span>
+              {historySnapshots.length > 0 && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-blue-200 dark:bg-blue-900 text-blue-800 dark:text-blue-200 font-bold ml-0.5">
+                  {historySnapshots.length}
+                </span>
+              )}
+            </button>
+
             <input
               type="file"
               ref={fileInputRef}
@@ -599,6 +909,15 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
             </button>
 
             <button
+              onClick={() => setShowFindReplace((prev) => !prev)}
+              className={`btn-header ${showFindReplace ? 'border-blue-500 bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400' : ''}`}
+              title={lang === 'ja' ? '文字列の検索・置換 (Ctrl+F)' : 'Find & Replace (Ctrl+F)'}
+            >
+              <Search className="w-3.5 h-3.5 text-blue-600" />
+              <span>{lang === 'ja' ? '検索・置換' : 'Find / Replace'}</span>
+            </button>
+
+            <button
               onClick={handleCopyCode}
               className="btn-header"
               title={lang === 'ja' ? 'コードをコピー' : 'Copy Code'}
@@ -610,65 +929,83 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
         </div>
 
         {/* Global Queue File Selection & Multi-select Bar */}
-        {fileList.length > 0 && (
-          <div className="mt-3 p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-col gap-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 mb-0">
-                <Layers className="w-3.5 h-3.5 text-blue-600" />
-                <span>{lang === 'ja' ? '読み込み済みファイルから選択して開く:' : 'Select from Loaded Queue:'}</span>
-              </label>
+        <div className="mt-3 p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-col gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 mb-0">
+              <Layers className="w-3.5 h-3.5 text-blue-600" />
+              <span>{lang === 'ja' ? '読み込み済みHTML/Webファイルを選択:' : 'Select Target HTML/Web File:'}</span>
+            </label>
 
-              {selectedQueueFileIds.length > 1 && (
-                <button
-                  onClick={handleCombineSelectedQueueFiles}
-                  className="px-2.5 py-1 text-xs font-semibold rounded-md bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1 shadow-xs"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>{lang === 'ja' ? `${selectedQueueFileIds.length} 件を結合して読み込む` : `Combine ${selectedQueueFileIds.length} files`}</span>
-                </button>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {/* Single Select Dropdown */}
-              <select
-                value={selectedQueueFileId}
-                onChange={(e) => handleSelectFromQueue(e.target.value)}
-                className="main-select text-xs mb-0"
+            {selectedQueueFileIds.length > 1 && (
+              <button
+                onClick={handleCombineSelectedQueueFiles}
+                className="px-2.5 py-1 text-xs font-semibold rounded-md bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1 shadow-xs"
               >
-                <option value="">{lang === 'ja' ? '-- 単一ファイルを選択して読み込み --' : '-- Select Single File --'}</option>
-                {fileList.map((f) => (
+                <Plus className="w-3.5 h-3.5" />
+                <span>{lang === 'ja' ? `${selectedQueueFileIds.length} 件を結合して読み込む` : `Combine ${selectedQueueFileIds.length} files`}</span>
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {/* Single Select Dropdown */}
+            <select
+              value={selectedQueueFileId}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === '__upload_new__') {
+                  fileInputRef.current?.click();
+                  return;
+                }
+                handleSelectFromQueue(val);
+              }}
+              className="main-select text-xs mb-0"
+            >
+              <option value="">{lang === 'ja' ? '-- アップロードされたHTML/Webファイルを選択 --' : '-- Select Uploaded HTML/Web File --'}</option>
+              <option value="__upload_new__">
+                {lang === 'ja' ? '📁 ＋ 新しいHTML/ファイルを端末からアップロード...' : '📁 + Upload New HTML/File...'}
+              </option>
+              {fileList
+                .filter((f) =>
+                  ['html', 'htm', 'md', 'markdown', 'txt'].includes(f.format?.toLowerCase() || '') ||
+                  /\.(html|htm|md|markdown|txt)$/i.test(f.name)
+                )
+                .map((f) => (
                   <option key={f.id} value={f.id}>
                     {f.name} (.{f.format})
                   </option>
                 ))}
-              </select>
+            </select>
 
               {/* Multi-select Chips list */}
               <div className="flex items-center gap-1.5 overflow-x-auto py-1 text-xs">
                 <span className="text-[11px] text-slate-500 whitespace-nowrap font-medium mr-1">
                   {lang === 'ja' ? '複数選択:' : 'Multi:'}
                 </span>
-                {fileList.map((f) => {
-                  const isSel = selectedQueueFileIds.includes(f.id);
-                  return (
-                    <button
-                      key={f.id}
-                      onClick={() => handleToggleMultiSelectQueue(f.id)}
-                      className={`px-2 py-0.5 rounded-md border text-[11px] font-medium transition-colors whitespace-nowrap ${
-                        isSel
-                          ? 'bg-blue-600 text-white border-blue-600'
-                          : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-blue-400'
-                      }`}
-                    >
-                      {f.name}
-                    </button>
-                  );
-                })}
+                {fileList
+                  .filter((f) =>
+                    ['html', 'htm', 'md', 'markdown', 'txt'].includes(f.format?.toLowerCase() || '') ||
+                    /\.(html|htm|md|markdown|txt)$/i.test(f.name)
+                  )
+                  .map((f) => {
+                    const isSel = selectedQueueFileIds.includes(f.id);
+                    return (
+                      <button
+                        key={f.id}
+                        onClick={() => handleToggleMultiSelectQueue(f.id)}
+                        className={`px-2 py-0.5 rounded-md border text-[11px] font-medium transition-colors whitespace-nowrap ${
+                          isSel
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-blue-400'
+                        }`}
+                      >
+                        {f.name}
+                      </button>
+                    );
+                  })}
               </div>
             </div>
           </div>
-        )}
 
         {/* Mode Selector & View Controls */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
@@ -794,17 +1131,132 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
                   {docType === 'markdown' ? 'Markdown Source' : 'HTML Source'}
                 </span>
               </div>
-              <input
-                type="text"
-                value={fileName}
-                onChange={(e) => setFileName(e.target.value)}
-                className="text-xs px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 max-w-[160px]"
-                title="File Name"
-              />
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowFindReplace((prev) => !prev)}
+                  className={`px-2 py-1 text-xs rounded-md border flex items-center gap-1 font-semibold transition ${
+                    showFindReplace
+                      ? 'bg-blue-50 dark:bg-blue-950 border-blue-400 text-blue-600 dark:text-blue-400'
+                      : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-blue-400'
+                  }`}
+                  title={lang === 'ja' ? '文字列の検索・置換 (Ctrl+F)' : 'Find & Replace (Ctrl+F)'}
+                >
+                  <Search className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">{lang === 'ja' ? '検索・置換' : 'Find / Replace'}</span>
+                </button>
+                <input
+                  type="text"
+                  value={fileName}
+                  onChange={(e) => setFileName(e.target.value)}
+                  className="text-xs px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 max-w-[140px]"
+                  title="File Name"
+                />
+              </div>
             </div>
+
+            {/* Interactive Find & Replace Bar */}
+            {showFindReplace && (
+              <div className="p-3 bg-blue-50/70 dark:bg-slate-900 border-b border-blue-200 dark:border-slate-700 flex flex-col gap-2 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 flex-1 min-w-[240px]">
+                    <div className="relative flex-1">
+                      <input
+                        type="text"
+                        value={findQuery}
+                        onChange={(e) => {
+                          setFindQuery(e.target.value);
+                          setCurrentMatchIdx(0);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (e.shiftKey) handleFindPrev();
+                            else handleFindNext();
+                          }
+                        }}
+                        placeholder={lang === 'ja' ? '検索する文字列...' : 'Find text...'}
+                        className="w-full px-2.5 py-1 text-xs rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 pr-16"
+                        autoFocus
+                      />
+                      <span className="absolute right-2 top-1.5 text-[10px] text-slate-500 font-mono">
+                        {findQuery ? `${getFindMatches().length} ${lang === 'ja' ? '件' : 'matches'}` : ''}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={handleFindPrev}
+                        disabled={getFindMatches().length === 0}
+                        className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                        title={lang === 'ja' ? '前の一致 (Shift+Enter)' : 'Previous Match (Shift+Enter)'}
+                      >
+                        <ArrowUp className="w-3.5 h-3.5 text-slate-600 dark:text-slate-300" />
+                      </button>
+                      <button
+                        onClick={handleFindNext}
+                        disabled={getFindMatches().length === 0}
+                        className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                        title={lang === 'ja' ? '次の一致 (Enter)' : 'Next Match (Enter)'}
+                      >
+                        <ArrowDown className="w-3.5 h-3.5 text-slate-600 dark:text-slate-300" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300 cursor-pointer select-none whitespace-nowrap">
+                    <input
+                      type="checkbox"
+                      checked={isCaseSensitive}
+                      onChange={(e) => setIsCaseSensitive(e.target.checked)}
+                      className="rounded border-slate-300 text-blue-600 cursor-pointer"
+                    />
+                    <span>{lang === 'ja' ? '大文字/小文字を区別' : 'Match Case'}</span>
+                  </label>
+
+                  <button
+                    onClick={() => setShowFindReplace(false)}
+                    className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={replaceQuery}
+                    onChange={(e) => setReplaceQuery(e.target.value)}
+                    placeholder={lang === 'ja' ? '置換後の文字列...' : 'Replace with...'}
+                    className="flex-1 min-w-[200px] px-2.5 py-1 text-xs rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100"
+                  />
+                  <button
+                    onClick={handleReplaceNext}
+                    disabled={!findQuery || getFindMatches().length === 0}
+                    className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-xs font-semibold hover:border-blue-400 disabled:opacity-40 whitespace-nowrap"
+                  >
+                    {lang === 'ja' ? '置換' : 'Replace'}
+                  </button>
+                  <button
+                    onClick={handleReplaceAll}
+                    disabled={!findQuery || getFindMatches().length === 0}
+                    className="px-2.5 py-1 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-2xs disabled:opacity-40 whitespace-nowrap"
+                  >
+                    {lang === 'ja' ? 'すべて置換' : 'Replace All'}
+                  </button>
+                </div>
+              </div>
+            )}
+
             <textarea
+              ref={textareaRef}
               value={codeContent}
               onChange={(e) => setCodeContent(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+                  e.preventDefault();
+                  setShowFindReplace(true);
+                }
+              }}
               placeholder={docType === 'markdown' ? '# タイトル\n\nここに記述...' : '<html>...</html>'}
               spellCheck={false}
               className={`w-full ${isFullscreen ? 'h-[620px]' : 'h-[460px]'} p-4 font-mono text-xs leading-relaxed bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 resize-none focus:outline-hidden`}
@@ -930,11 +1382,6 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
                 />
               </div>
             </div>
-
-            <div className="px-4 py-2 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500">
-              <span>{lang === 'ja' ? '🔒 端末内サンドボックス表示' : '🔒 Secure Sandboxed Render'}</span>
-              <span>{previewDevice.toUpperCase()} ({previewDevice === 'mobile' ? '375px' : previewDevice === 'tablet' ? '768px' : '100%'})</span>
-            </div>
           </div>
         )}
       </div>
@@ -948,7 +1395,7 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
           </span>
         </div>
 
-        <div className="btn-group-equal grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 mt-2 items-stretch">
+        <div className="btn-group-equal grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mt-2 items-stretch">
           {/* 1. Download HTML / MD */}
           <button
             onClick={handleDownloadFile}
@@ -973,19 +1420,131 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
             className="btn h-full min-h-[52px] m-0 py-2.5 px-4 flex items-center justify-center gap-2 text-center bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white disabled:opacity-50"
           >
             {isExportingPdf ? <RefreshCw className="w-4 h-4 animate-spin shrink-0" /> : <FileDown className="w-4 h-4 shrink-0" />}
-            <span>{lang === 'ja' ? 'PDF形式でエクスポート (.pdf)' : 'Export as High-Res PDF'}</span>
+            <span>{lang === 'ja' ? '高精細PDF出力 (.pdf)' : 'Export as High-Res PDF'}</span>
           </button>
 
-          {/* 3. Extract Text */}
+          {/* 3. Export as Image (PNG) */}
+          <button
+            onClick={handleExportImage}
+            disabled={isExportingPdf}
+            className="btn h-full min-h-[52px] m-0 py-2.5 px-4 flex items-center justify-center gap-2 text-center bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white disabled:opacity-50"
+          >
+            {isExportingPdf ? <RefreshCw className="w-4 h-4 animate-spin shrink-0" /> : <FileDown className="w-4 h-4 shrink-0" />}
+            <span>{lang === 'ja' ? '画像として出力 (.png)' : 'Export as Image (.png)'}</span>
+          </button>
+
+          {/* 4. Extract Text */}
           <button
             onClick={handleExtractText}
             className="btn h-full min-h-[52px] m-0 py-2.5 px-4 flex items-center justify-center gap-2 text-center bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white"
           >
             <FileText className="w-4 h-4 shrink-0" />
-            <span>{lang === 'ja' ? 'プレーンテキスト保存 (.txt)' : 'Save Plain Text (.txt)'}</span>
+            <span>{lang === 'ja' ? 'テキスト抽出 (.txt)' : 'Save Plain Text (.txt)'}</span>
           </button>
         </div>
       </div>
+
+      {/* Local Storage Version History & Restore Modal */}
+      {showHistoryModal && (
+        <div
+          className="fixed inset-0 z-[9999] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setShowHistoryModal(false)}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+                  <RotateCcw className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-900 dark:text-slate-100 text-sm">
+                    {lang === 'ja' ? 'ローカル保存履歴・いつでも復元' : 'Local Draft History & Restore'}
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    {lang === 'ja'
+                      ? 'ブラウザ内のローカルストレージに自動保存された過去のスナップショットから復元できます。'
+                      : 'Restore any previous autosaved version preserved in your browser local storage.'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowHistoryModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {historySnapshots.length === 0 ? (
+              <div className="text-center py-8 text-xs text-slate-400">
+                {lang === 'ja' ? '保存されている履歴スナップショットはありません。' : 'No saved snapshots yet.'}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2.5">
+                {historySnapshots.map((snap) => {
+                  const dateStr = new Date(snap.timestamp).toLocaleString();
+                  return (
+                    <div
+                      key={snap.id}
+                      className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 hover:border-blue-300 dark:hover:border-blue-700 transition flex items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-bold text-slate-800 dark:text-slate-200 truncate">
+                            {snap.fileName}
+                          </span>
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-bold uppercase">
+                            {snap.docType}
+                          </span>
+                          <span className="text-[11px] text-slate-400">
+                            {dateStr}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate font-mono">
+                          {snap.snippet || '(空のコンテンツ)'}
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={() => handleRestoreSnapshot(snap)}
+                        className="btn-sm btn-primary shrink-0 flex items-center gap-1.5"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>{lang === 'ja' ? 'この版を復元' : 'Restore'}</span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs">
+              <button
+                onClick={() => {
+                  try {
+                    localStorage.removeItem('umc_html_studio_snapshots');
+                    setHistorySnapshots([]);
+                    if (onShowToast) onShowToast(lang === 'ja' ? '履歴をクリアしました' : 'Cleared history');
+                  } catch (e) {}
+                }}
+                className="text-slate-400 hover:text-rose-600 transition"
+              >
+                {lang === 'ja' ? '履歴スナップショットを全消去' : 'Clear All Snapshots'}
+              </button>
+
+              <button
+                onClick={() => setShowHistoryModal(false)}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                {lang === 'ja' ? '閉じる' : 'Close'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
