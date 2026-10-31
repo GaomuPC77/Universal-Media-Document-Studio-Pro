@@ -15,12 +15,18 @@ import { ImageEditorSuite } from './components/Tabs/ImageEditorSuite';
 import { StatusQueueCard } from './components/StatusQueueCard';
 import { FilePreviewModal } from './components/Modals/FilePreviewModal';
 import { DrivePickerModal } from './components/Modals/DrivePickerModal';
+import { DriveDomainAuthModal } from './components/Modals/DriveDomainAuthModal';
 import { HistoryModal } from './components/Modals/HistoryModal';
 import { BackupModal } from './components/Modals/BackupModal';
 import { OfflinePackModal } from './components/Modals/OfflinePackModal';
 import { ShareModal } from './components/Modals/ShareModal';
 import { downloadOfflinePack } from './utils/offlinePack';
-import { uploadFileToDrive, getStoredToken, requestGoogleAccessToken } from './utils/googleDrive';
+import {
+  uploadFileToDrive,
+  getStoredToken,
+  requestGoogleAccessToken,
+  isUnauthorizedDomainError,
+} from './utils/googleDrive';
 import { savePendingFile, getPendingFiles, deletePendingFile, clearEntireAppCache } from './utils/historyDb';
 import { FileItem, DocumentFormat } from './types';
 import {
@@ -51,6 +57,7 @@ export default function App() {
 
   // Modals state
   const [isDriveModalOpen, setIsDriveModalOpen] = useState(false);
+  const [isDriveDomainModalOpen, setIsDriveDomainModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [isOfflinePackModalOpen, setIsOfflinePackModalOpen] = useState(false);
@@ -419,6 +426,10 @@ export default function App() {
         showToast(lang === 'ja' ? 'Google認証を開いています...' : 'Opening Google Sign-in...');
         token = await requestGoogleAccessToken();
       } catch (e: any) {
+        if (isUnauthorizedDomainError(e)) {
+          setIsDriveDomainModalOpen(true);
+          return;
+        }
         if (e?.code !== 'auth/popup-closed-by-user') {
           showToast(lang === 'ja' ? 'Google Driveと連携してください' : 'Please connect Google Drive first');
         }
@@ -1243,6 +1254,17 @@ export default function App() {
           if (files.length > 0) {
             handleFilesAdded(files);
           }
+        }}
+      />
+
+      {/* Google Drive Domain Authorization & Token Connection Modal */}
+      <DriveDomainAuthModal
+        isOpen={isDriveDomainModalOpen}
+        onClose={() => setIsDriveDomainModalOpen(false)}
+        lang={lang}
+        onRetryConnect={() => setIsDriveModalOpen(true)}
+        onConnectedSuccess={() => {
+          showToast(lang === 'ja' ? '✓ Google Driveに接続しました' : '✓ Connected to Google Drive');
         }}
       />
 

@@ -25,7 +25,9 @@ import {
   DriveFileInfo,
   DriveUser,
   getStoredToken,
+  isUnauthorizedDomainError,
 } from '../../utils/googleDrive';
+import { DriveDomainAuthModal } from './DriveDomainAuthModal';
 
 interface DrivePickerModalProps {
   isOpen: boolean;
@@ -49,6 +51,7 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isDomainAuthModalOpen, setIsDomainAuthModalOpen] = useState(false);
 
   // Initialize and check connection state
   useEffect(() => {
@@ -75,12 +78,10 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
         await loadFiles();
       },
       (err) => {
-        console.error('GIS Error in Modal:', err);
-        setErrorMessage(
-          lang === 'ja'
-            ? 'Google認証に失敗しました。ポップアップのブロックを解除してください。'
-            : 'Authentication failed. Please check popup blockers.'
-        );
+        console.warn('GIS notice in Modal:', err);
+        if (isUnauthorizedDomainError(err)) {
+          setIsDomainAuthModalOpen(true);
+        }
       }
     );
   }, [isOpen]);
@@ -117,17 +118,21 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
           await loadFiles();
         },
         (err) => {
-          console.error('Google Auth error in Modal:', err);
-          setErrorMessage(
-            lang === 'ja'
-              ? 'Google認証に失敗しました。ポップアップのブロックを解除してください。'
-              : 'Authentication failed. Please check popup blockers.'
-          );
+          console.warn('Google Auth notice in Modal:', err);
+          if (isUnauthorizedDomainError(err)) {
+            setIsDomainAuthModalOpen(true);
+          } else if (err?.code !== 'auth/popup-closed-by-user' && err?.type !== 'popup_closed') {
+            setIsDomainAuthModalOpen(true);
+          }
         }
       );
     } catch (e: any) {
-      if (e?.code !== 'auth/popup-closed-by-user') {
-        setErrorMessage(e.message || (lang === 'ja' ? 'Google認証に失敗しました' : 'Authentication failed'));
+      if (isUnauthorizedDomainError(e)) {
+        setIsDomainAuthModalOpen(true);
+        return;
+      }
+      if (e?.code !== 'auth/popup-closed-by-user' && e?.type !== 'popup_closed') {
+        setIsDomainAuthModalOpen(true);
       }
     }
   };
@@ -304,17 +309,26 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                 </div>
               )}
 
-              <button
-                onClick={handleConnect}
-                className="py-2.5 px-6 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs transition shadow-xs cursor-pointer inline-flex items-center gap-2"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
-                  <polyline points="10 17 15 12 10 7"></polyline>
-                  <line x1="15" y1="12" x2="3" y2="12"></line>
-                </svg>
-                <span>{lang === 'ja' ? 'Google Driveアカウントでサインイン' : 'Sign in with Google'}</span>
-              </button>
+              <div className="flex flex-col sm:flex-row items-center gap-2.5">
+                <button
+                  onClick={handleConnect}
+                  className="py-2.5 px-6 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-xs transition shadow-xs cursor-pointer inline-flex items-center gap-2"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                    <polyline points="10 17 15 12 10 7"></polyline>
+                    <line x1="15" y1="12" x2="3" y2="12"></line>
+                  </svg>
+                  <span>{lang === 'ja' ? 'Google アカウントでサインイン' : 'Sign in with Google'}</span>
+                </button>
+
+                <button
+                  onClick={() => setIsDomainAuthModalOpen(true)}
+                  className="py-2.5 px-4 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold rounded-lg text-xs transition border border-slate-200 dark:border-slate-700 cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <span>{lang === 'ja' ? '外部ドメイン(Vercel)設定 / トークン接続' : 'Domain Setup / Token'}</span>
+                </button>
+              </div>
             </div>
           ) : (
             <div className="flex flex-col gap-3 flex-1 overflow-hidden">
@@ -513,6 +527,19 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
           </div>
         )}
       </div>
+
+      <DriveDomainAuthModal
+        isOpen={isDomainAuthModalOpen}
+        onClose={() => setIsDomainAuthModalOpen(false)}
+        lang={lang}
+        onRetryConnect={handleConnect}
+        onConnectedSuccess={async () => {
+          setIsConnected(true);
+          const user = await fetchDriveUserInfo();
+          if (user) setDriveUser(user);
+          await loadFiles();
+        }}
+      />
     </div>
   );
 };
