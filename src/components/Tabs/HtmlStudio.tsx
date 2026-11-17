@@ -812,9 +812,10 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
               <FileCode className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-base sm:text-lg text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                {lang === 'ja' ? 'HTML・マークダウン スタジオ' : 'HTML & Markdown Studio'}
-                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950/40 text-orange-600 dark:text-orange-400 border border-orange-200 dark:border-orange-800/40">
+              <h3 className="font-bold text-base sm:text-lg text-slate-800 dark:text-slate-100 flex flex-wrap items-baseline gap-x-2">
+                <span>{lang === 'ja' ? 'HTML・マークダウン スタジオ' : 'HTML & Markdown Studio'}</span>
+                <span className="text-xs font-normal text-slate-400" aria-hidden="true">·</span>
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400 tabular-nums">
                   {codeContent.length.toLocaleString()} {lang === 'ja' ? '文字' : 'chars'}
                 </span>
               </h3>
@@ -845,8 +846,8 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
               <RotateCcw className="w-3.5 h-3.5 text-blue-600" />
               <span>{lang === 'ja' ? 'ローカル復元' : 'Restore'}</span>
               {historySnapshots.length > 0 && (
-                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-blue-200 dark:bg-blue-900 text-blue-800 dark:text-blue-200 font-bold ml-0.5">
-                  {historySnapshots.length}
+                <span className="text-[11px] font-bold text-blue-700 dark:text-blue-300 tabular-nums ml-0.5">
+                  ({historySnapshots.length})
                 </span>
               )}
             </button>
@@ -963,7 +964,7 @@ export const HtmlStudio: React.FC<HtmlStudioProps> = ({
             >
               <option value="">{lang === 'ja' ? '-- アップロードされたHTML/Webファイルを選択 --' : '-- Select Uploaded HTML/Web File --'}</option>
               <option value="__upload_new__">
-                {lang === 'ja' ? '📁 ＋ 新しいHTML/ファイルを端末からアップロード...' : '📁 + Upload New HTML/File...'}
+                {lang === 'ja' ? '+ 新しいHTML/ファイルを端末からアップロード...' : '+ Upload New HTML/File...'}
               </option>
               {fileList
                 .filter((f) =>

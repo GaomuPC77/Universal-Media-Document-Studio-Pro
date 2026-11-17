@@ -86,3 +86,43 @@ export interface RedactionBox {
   height: number;
   color: string;
 }
+
+export interface PdfTextBoxAnnotation {
+  id: string;
+  pageIndex: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text: string;
+  fontSize: number;
+  fontFamily: 'sans' | 'serif' | 'mono';
+  bold: boolean;
+  textColor: string;
+  bgColor: string;
+  bgOpacity: number;
+  borderColor: string;
+  borderWidth: number;
+  align: 'left' | 'center' | 'right';
+}
+
+export interface PdfMarkupAnnotation {
+  id: string;
+  pageIndex: number;
+  kind: 'highlight' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'pen' | 'badge';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  x1?: number;
+  y1?: number;
+  x2?: number;
+  y2?: number;
+  points?: Array<{ x: number; y: number }>;
+  strokeColor: string;
+  fillColor?: string;
+  strokeWidth: number;
+  opacity: number;
+  label?: string;
+}
+

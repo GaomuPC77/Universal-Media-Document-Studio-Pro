@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Header } from './components/Header';
 import { CommonUploadCard } from './components/CommonUploadCard';
 import { TabNavigation } from './components/TabNavigation';
@@ -12,6 +12,7 @@ import { ZipSuite } from './components/Tabs/ZipSuite';
 import { HistoryTab } from './components/Tabs/HistoryTab';
 import { HtmlStudio } from './components/Tabs/HtmlStudio';
 import { ImageEditorSuite } from './components/Tabs/ImageEditorSuite';
+import { MetadataSuite } from './components/Tabs/MetadataSuite';
 import { StatusQueueCard } from './components/StatusQueueCard';
 import { FilePreviewModal } from './components/Modals/FilePreviewModal';
 import { DrivePickerModal } from './components/Modals/DrivePickerModal';
@@ -20,27 +21,35 @@ import { HistoryModal } from './components/Modals/HistoryModal';
 import { BackupModal } from './components/Modals/BackupModal';
 import { OfflinePackModal } from './components/Modals/OfflinePackModal';
 import { ShareModal } from './components/Modals/ShareModal';
-import { downloadOfflinePack } from './utils/offlinePack';
+import {
+  TAB_DEFINITIONS,
+  TabAdaptiveMode,
+  loadTabAdaptiveMode,
+  saveTabAdaptiveMode,
+  loadTabUsage,
+  recordTabVisit,
+  recordTabAction,
+  clearTabUsage,
+  getOrderedTabs,
+  getBestMatchingTabId,
+  hasTabAffinity,
+  TabUsageMap,
+} from './utils/tabOrdering';
 import {
   uploadFileToDrive,
   getStoredToken,
   requestGoogleAccessToken,
   isUnauthorizedDomainError,
 } from './utils/googleDrive';
-import { savePendingFile, getPendingFiles, deletePendingFile, clearEntireAppCache } from './utils/historyDb';
+import { savePendingFile, getPendingFiles } from './utils/historyDb';
 import { FileItem, DocumentFormat } from './types';
 import {
   UploadCloud,
-  CheckCircle2,
   ChevronRight,
   ChevronLeft,
-  X,
-  Sparkles,
   ArchiveRestore,
-  Smartphone,
   Download,
   Upload,
-  HardDrive,
 } from 'lucide-react';
 
 export default function App() {
@@ -54,6 +63,54 @@ export default function App() {
   const [activeSharedFile, setActiveSharedFile] = useState<File | null>(null);
   const [isWindowDragging, setIsWindowDragging] = useState(false);
   const dragCounter = useRef<number>(0);
+
+  // Adaptive Tab Behavior State ('scroll' | 'reorder' | 'off')
+  const [tabAdaptiveMode, setTabAdaptiveMode] = useState<TabAdaptiveMode>(() => loadTabAdaptiveMode());
+  const [tabUsage, setTabUsage] = useState<TabUsageMap>(() => loadTabUsage());
+  const [scrollTargetRequest, setScrollTargetRequest] = useState<{ tabId: string; seq: number } | null>(null);
+
+  const handleSelectTab = (nextTabId: string) => {
+    setActiveTab(nextTabId);
+    setTabUsage(recordTabVisit(nextTabId));
+  };
+
+  const handleChangeTabAdaptiveMode = (nextMode: TabAdaptiveMode) => {
+    setTabAdaptiveMode(nextMode);
+    saveTabAdaptiveMode(nextMode);
+    if (nextMode === 'scroll') {
+      const targetId = getBestMatchingTabId(fileList, tabUsage, activeSharedFile);
+      if (targetId) {
+        setScrollTargetRequest({ tabId: targetId, seq: Date.now() });
+      }
+      showToast(
+        lang === 'ja'
+          ? 'タブ表示を「最適タブへ自動スクロール（順番固定）」に変更しました'
+          : 'Tab behavior set to Auto-Scroll (Fixed Order)'
+      );
+    } else if (nextMode === 'reorder') {
+      showToast(
+        lang === 'ja'
+          ? 'タブ表示を「使用状況・拡張子で順番を並び替え」に変更しました'
+          : 'Tab behavior set to Reorder by Usage & Extension'
+      );
+    } else {
+      showToast(
+        lang === 'ja'
+          ? 'タブの自動連動をオフにしました（常に固定順）'
+          : 'Tab automation turned off (Fixed order, manual only)'
+      );
+    }
+  };
+
+  const orderedTabs = useMemo(
+    () => getOrderedTabs(fileList, tabUsage, activeSharedFile),
+    [fileList, tabUsage, activeSharedFile]
+  );
+
+  const displayedTabs = useMemo(
+    () => (tabAdaptiveMode === 'reorder' ? orderedTabs : TAB_DEFINITIONS),
+    [tabAdaptiveMode, orderedTabs]
+  );
 
   // Modals state
   const [isDriveModalOpen, setIsDriveModalOpen] = useState(false);
@@ -136,36 +193,36 @@ export default function App() {
       targetId: 'commonUploadCard',
       titleJa: '1. 処理するファイルの読み込み・追加',
       titleEn: '1. Load & Add Files',
-      descJa: 'ファイル、フォルダ、またはGoogle Driveから処理したいファイルを追加します。ドラッグ＆ドロップにも対応しています。',
-      descEn: 'Add files, folders, or import from Google Drive here. Drag & drop is fully supported.',
+      descJa: 'ファイル、フォルダ、またはGoogle Driveから処理したいファイルを追加します。画面全体へのドラッグ＆ドロップにも対応しています。',
+      descEn: 'Add files, folders, or import from Google Drive here. Global window drag & drop is fully supported.',
     },
     {
       targetId: 'tabNavContainer',
-      titleJa: '2. 処理ツールの選択（機能タブ）',
-      titleEn: '2. Select Processing Tool',
-      descJa: '「PDF編集・整理」「PDF ⇔ 画像」「画像編集・変換」「Office・データ表」「HTML・Markdown」「電子印鑑」「OCR」「差分比較」「ZIP・リネーム」「履歴」など、目的の処理タブを選択して切り替えます。左右の矢印ボタンやマウスホイール・ドラッグで横スクロールできます。',
-      descEn: 'Switch between suites like PDF Toolkit, PDF ⇔ Image, Image Studio & Convert, Office & Data Suite, HTML/Markdown Studio, Sign & Stamp, OCR, Diff Studio, ZIP & Rename, and History.',
+      titleJa: '2. 処理ツールの選択 ＆ タブ連動モード設定',
+      titleEn: '2. Select Tool & Tab Behavior',
+      descJa: '「PDF編集・整理（マークアップ・テキストボックス含む）」「PDF ⇔ 画像」「画像編集・変換」「Office・データ表」「HTML・Markdown」「電子印鑑・署名・PDF注釈」「OCR・QR」「差分比較」「メタデータ・C2PA」「ZIP・一括リネーム」「履歴」から選択します。右上のメニューで「自動スクロール（順番固定）」「順番自動並び替え」「オフ」の3モードを切り替えられます。',
+      descEn: 'Choose from PDF Toolkit (with Markup/Text Box), PDF ⇔ Image, Image Studio & Convert, Office & Data, HTML & Markdown, Sign & PDF Markup, OCR & QR, Diff Studio, Metadata & C2PA, ZIP & Rename, and History. Use the selector above the tabs to toggle Auto-Scroll, Reorder, or Off.',
     },
     {
       targetId: 'mainTabContentArea',
-      titleJa: '3. 変換・編集の各種設定と実行',
-      titleEn: '3. Configure & Execute',
-      descJa: '選択した処理タブで、変換先のフォーマットやオプション、編集内容を設定して処理を実行します。タブを切り替えても作業内容は保持されます。',
-      descEn: 'Configure output formats, options, and editing parameters. Your progress is preserved even when switching between tabs.',
+      titleJa: '3. 編集・注釈・変換・メタデータ処理の実行',
+      titleEn: '3. Edit, Annotate, Convert & Inspect',
+      descJa: 'PDFへの日本語テキストボックス・手書き/図形マークアップ・印鑑捺印、EXIF/PNG/PDF/Office/C2PAなど全メタデータの編集とリスク確認、Office変換やOCRを実行します。他タブへ切り替えても作業内容は保持されます。',
+      descEn: 'Add Japanese text boxes & PDF markup, inspect/edit all metadata with risk guides, convert Office/data tables, run OCR, and more. Work stays intact across tabs.',
     },
     {
       targetId: 'statusQueueSection',
-      titleJa: '4. 変換・処理ステータス（進捗・保存・ZIP）',
+      titleJa: '4. 変換・処理ステータス（プレビュー・保存・ZIP）',
       titleEn: '4. Status Queue & Downloads',
-      descJa: '処理のリアルタイム進捗や完了ファイルの一覧がここに集約されます。個別保存、Google Drive保存、一括ZIPダウンロードが行えます。',
-      descEn: 'View real-time progress and completed files. Download individually, save to Google Drive, or batch download as a ZIP archive.',
+      descJa: '処理のリアルタイム進捗や完了ファイルの一覧がここに集約されます。プレビュー確認、個別保存、Google Drive保存、一括ZIPダウンロードが行えます。',
+      descEn: 'Monitor real-time progress, preview results, save files individually, upload directly to Google Drive, or download everything as a ZIP.',
     },
     {
       targetId: 'mainAppContainer',
-      titleJa: '5. オフラインパック ＆ 各種機能',
-      titleEn: '5. Offline Pack & Utilities',
-      descJa: '「オフライン用パックを取得」をクリックすると、ネット接続が不要な完全スタンドアロン版HTMLと起動用バッチファイルをダウンロードできます。言語やテーマの切り替えもここから行えます。',
-      descEn: 'Click "Offline Pack" to download a 100% standalone offline edition. Switch languages and themes anytime.',
+      titleJa: '5. オフラインパック ＆ 作業バックアップ引き継ぎ',
+      titleEn: '5. Offline Pack & Workspace Backup',
+      descJa: '「オフライン用パックを取得」でネット不要のスタンドアロン版を入手できるほか、作業バックアップ機能でファイル・履歴・編集中データを別端末へ引き継げます。言語やテーマ切替も上部から行えます。',
+      descEn: 'Download a standalone Offline Pack, transfer your queue/drafts across devices via Backup, and switch language or theme anytime from the header.',
     },
   ];
 
@@ -341,14 +398,25 @@ export default function App() {
       return [...filtered, ...prev];
     });
 
+    if (tabAdaptiveMode === 'scroll') {
+      const bestTabId = getBestMatchingTabId(newItems, tabUsage, fileArray[0]);
+      if (bestTabId) {
+        if (!hasTabAffinity(newItems, activeTab)) {
+          setActiveTab(bestTabId);
+        }
+        setScrollTargetRequest({ tabId: bestTabId, seq: Date.now() });
+      }
+    }
+
     showToast(
       lang === 'ja'
-        ? `📄 ${fileArray.length} 件のファイルを読み込みました。下の処理を選択して変換できます。`
-        : `📄 Loaded ${fileArray.length} file(s). Select a tab below to process.`
+        ? `${fileArray.length} 件のファイルを読み込みました。下の処理タブから選択して編集・変換できます。`
+        : `Loaded ${fileArray.length} file(s). Select a tab below to process.`
     );
   };
 
   const handleResultReady = (item: FileItem) => {
+    setTabUsage(recordTabAction(activeTab));
     setFileList((prev) => {
       const existingIdx = prev.findIndex((p) => p.name === item.name || p.id === item.id);
       if (existingIdx !== -1) {
@@ -448,8 +516,8 @@ export default function App() {
       );
       showToast(
         lang === 'ja'
-          ? `✓ 「${res.name}」をGoogle Driveに保存しました`
-          : `✓ Saved "${res.name}" to Google Drive`
+          ? `「${res.name}」をGoogle Driveに保存しました`
+          : `Saved "${res.name}" to Google Drive`
       );
     } catch (e: any) {
       console.error('Save to Drive error:', e);
@@ -474,7 +542,7 @@ export default function App() {
           className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex flex-col items-center justify-center animate-fade-in cursor-pointer p-4"
         >
           <div className="p-8 rounded-2xl bg-white dark:bg-slate-900 shadow-2xl border-2 border-dashed border-blue-500 flex flex-col items-center gap-3 text-center max-w-sm pointer-events-none">
-            <UploadCloud className="w-14 h-14 text-blue-600 animate-bounce" />
+            <UploadCloud className="w-12 h-12 text-blue-600" />
             <h3 className="font-bold text-base sm:text-lg text-slate-800 dark:text-slate-100">
               {lang === 'ja' ? 'ここにファイルをドロップ' : 'Drop Files to Load'}
             </h3>
@@ -510,11 +578,15 @@ export default function App() {
           />
         </div>
 
-        {/* Tab Navigation (Directly underneath with Left & Right scroll buttons) */}
+        {/* Tab Navigation (Supports Auto-Scroll, Adaptive Reorder, or Fixed Off Mode) */}
         <TabNavigation
           activeTab={activeTab}
-          setActiveTab={setActiveTab}
+          setActiveTab={handleSelectTab}
           lang={lang}
+          tabs={displayedTabs}
+          adaptiveMode={tabAdaptiveMode}
+          onChangeAdaptiveMode={handleChangeTabAdaptiveMode}
+          scrollTargetRequest={scrollTargetRequest}
         />
 
         {/* Tab Contents - Kept mounted persistently so state and inputs are never lost */}
@@ -623,6 +695,17 @@ export default function App() {
             />
           </div>
 
+          <div style={{ display: activeTab === 'metadata-studio' ? 'block' : 'none' }}>
+            <MetadataSuite
+              lang={lang}
+              sharedFile={activeSharedFile}
+              fileList={fileList}
+              onResultReady={handleResultReady}
+              onAddFiles={handleFilesAdded}
+              onShowToast={showToast}
+            />
+          </div>
+
           <div style={{ display: activeTab === 'zip-suite' ? 'block' : 'none' }}>
             <ZipSuite
               lang={lang}
@@ -652,7 +735,20 @@ export default function App() {
               }}
               onLoadToActiveStudio={(file) => {
                 handleFilesAdded([file]);
-                setActiveTab('converter');
+                const fmt = getFormatFromExt(file.name);
+                const tempItem: FileItem = {
+                  id: 'tmp',
+                  file,
+                  name: file.name,
+                  size: file.size,
+                  type: file.type,
+                  format: fmt,
+                  targetFormat: fmt,
+                  status: 'idle',
+                  progress: 0,
+                };
+                const best = getOrderedTabs([tempItem], tabUsage, file)[0];
+                if (best) handleSelectTab(best.id);
               }}
               onShowToast={showToast}
             />
@@ -672,6 +768,8 @@ export default function App() {
           onClearCache={() => {
             setFileList([]);
             setActiveSharedFile(null);
+            clearTabUsage();
+            setTabUsage({});
           }}
         />
 
@@ -683,9 +781,10 @@ export default function App() {
                 <ArchiveRestore className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="font-bold text-base text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <h3 className="font-bold text-base text-slate-800 dark:text-slate-100 flex flex-wrap items-baseline gap-x-2">
                   <span>{lang === 'ja' ? 'データ引き継ぎ・作業バックアップ' : 'Workspace Transfer & Backup'}</span>
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-bold border border-blue-200 dark:border-blue-800 whitespace-nowrap">
+                  <span className="text-xs font-normal text-slate-500 dark:text-slate-400" aria-hidden="true">·</span>
+                  <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 whitespace-nowrap">
                     {lang === 'ja' ? '端末間引き継ぎ対応' : 'Cross-Device Ready'}
                   </span>
                 </h3>
@@ -718,72 +817,72 @@ export default function App() {
           </div>
         </div>
 
-        {/* Bottom Features, Environment, How-To, and FAQ Section conforming to Reference HTML */}
+        {/* Bottom Features, Environment, How-To, and FAQ Section */}
         <div className="card" id="featuresSection">
           <div className="info-card-title">{lang === 'ja' ? '本ツールの特徴' : 'Tool Features'}</div>
           <div className="info-box-grid">
             <div className="info-sub-box">
-              <h4 className="break-keep">{lang === 'ja' ? '完全ローカル ＆ 完全無制限' : 'Fully Local & Truly Unlimited'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? '完全ローカル処理 ＆ 完全無制限' : '100% Local Processing & Unlimited'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'サーバーへファイルをアップロードしない安全設計。容量制限や個数制限なく安心して利用できます。'
-                  : 'Secure architecture with zero server uploads. Convert freely without file size or count limitations.'}
+                  ? 'すべての処理をブラウザ（端末内）だけで実行し、ファイルデータを外部サーバーへ送信しない安全設計です。回数・容量のサーバー側制限なく利用できます。'
+                  : 'All processing runs strictly inside your browser with zero file uploads to external servers and no server-side size or count caps.'}
               </p>
             </div>
             <div className="info-sub-box">
-              <h4 className="break-keep">{lang === 'ja' ? '異種形式の一括ミックス処理' : 'Mixed Format Batch Processing'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? 'PDF編集・整理 ＆ マークアップ・テキストボックス' : 'PDF Toolkit, Markup & Text Boxes'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'PDF, DOCX, XLSX, PNG, JPG, WebP, CSV など異なる拡張子が混在したフォルダも指定形式へ一括で統一処理します。'
-                  : 'Batch-process folders containing mixed extensions into unified output formats seamlessly.'}
+                  ? 'ページの結合・分割・並び替え・回転・透かし・番号付けに加え、日本語や複数行に対応したテキストボックス挿入、蛍光ペン、フリーハンドペン、図形・矢印、ナンバリング、機密箇所の黒塗りをページ上で直接編集できます。'
+                  : 'Merge, split, reorder, rotate, watermark, and number PDFs, plus draw freehand ink, highlights, shapes, arrows, Japanese/multiline text boxes, numbered stamps, and redactions directly on pages.'}
               </p>
             </div>
             <div className="info-sub-box">
-              <h4 className="break-keep">{lang === 'ja' ? 'オフライン ＆ PWAアプリ対応' : 'Offline & PWA Ready'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? 'PDF ⇔ Office変換 ＆ データ表・画像スタジオ' : 'PDF ⇔ Office, Data Tables & Image Studio'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'ブラウザ経由で端末へインストール可能。ネットワーク接続がない完全オフライン環境でも動作します。'
-                  : 'Installable via browser as a standalone app. Functions completely offline without internet.'}
+                  ? 'PDFとWord・Excel・PowerPointの相互変換や、CSV/TSV/XLSX/JSON/HTML表/Markdown表の整形変換に対応。画像リサイズ・クロップ・モザイク/ぼかし・色調補正とPNG/JPG/WebP/BMP/ICO・PDF相互変換も行えます。'
+                  : 'Convert between PDF and Word/Excel/PowerPoint, transform CSV/TSV/XLSX/JSON/HTML/Markdown tables, and edit or convert images (PNG/JPG/WebP/BMP/ICO) and PDF pages.'}
               </p>
             </div>
             <div className="info-sub-box">
-              <h4 className="break-keep">{lang === 'ja' ? '途中停止からの自動復元' : 'Automatic Recovery from Interruptions'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? '電子印鑑・署名・PDF注釈 ＆ OCR・QRコード' : 'Electronic Stamps, Signatures & OCR / QR'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'ブラウザの終了や不意のリロード時も、キュー内のデータや編集状態を保持し続きから再開できます。'
-                  : 'Saves queue and draft data so you can recover and resume seamlessly after reloads or crashes.'}
+                  ? '丸印・角印（均等割付）・日付印や手書きサインを作成してPDFへ自在に配置・テキスト注釈追加が可能。ブラウザ内OCR文字認識（日本語/英語対応）やQRコード生成・カメラ読取にも対応しています。'
+                  : 'Create Japanese seals, handwritten signatures, text boxes, and markups on PDFs, extract text via client-side OCR (JA/EN), and generate or camera-scan QR codes.'}
               </p>
             </div>
             <div className="info-sub-box">
-              <h4 className="break-keep">{lang === 'ja' ? 'リアルタイム進捗表示' : 'Real-Time Progress Tracking'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? 'HTML・Markdown編集 ＆ 文書差分比較・ZIP処理' : 'HTML/Markdown Studio, Diff & ZIP Archive'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'ファイル読み込みや各変換処理の進行度を0%〜100%でリアルタイムに可視化。複数ファイルの一括処理時も個別の状況を瞬時に把握できます。'
-                  : 'Track real-time 0%-100% progress for all loading and conversion tasks with individual status indicators.'}
+                  ? '安全なサンドボックス内でのHTML/Markdownライブ編集・プレビュー・PDF/画像出力、PDF・Word・テキスト・CSV・JSONのSide-by-Side差分比較、ZIP圧縮・解凍・連番一括リネームを備えています。'
+                  : 'Edit and preview HTML/Markdown with PDF/PNG export, compare PDF/DOCX/text/CSV/JSON side-by-side, and compress, extract, or batch-rename files in ZIP archives.'}
               </p>
             </div>
             <div className="info-sub-box">
-              <h4 className="break-keep">{lang === 'ja' ? 'HTML・Markdown ライブプレビュー & 文書出力' : 'HTML & Markdown Live Preview & Export'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? '全メタデータ・C2PA確認・編集・リスク可視化' : 'Full Metadata & C2PA Editor + Risk Guide'}</h4>
               <p>
                 {lang === 'ja'
-                  ? '安全なサンドボックス内でのWebページ表示プレビューやソースコード編集、HTML/MarkdownからPDF・高精細画像・テキストへの変換を端末内完結で実行します。'
-                  : 'Sandboxed live web preview, real-time code editing, and fast export of HTML and Markdown to PDF, PNG, and plain text.'}
+                  ? 'EXIF/GPS/PNGチャンク/PDF辞書・XMP/Officeプロパティ/MP4・MOV・M4AメタデータやC2PA署名情報を単体・複数ファイルで検査し、ファイル名・名前上の拡張子・日時・位置情報を含む全検出項目を直接編集または削除できます。各項目の「設定内容」と「変更時のリスク」もあわせて表示します。'
+                  : 'Inspect, inline-edit, or scrub filenames, extensions, timestamps, GPS, C2PA Content Credentials, and all detected EXIF/PNG/PDF/Office/XMP/MP4 tags on single or multiple files—with plain-language descriptions and modification risk warnings for every field.'}
               </p>
             </div>
             <div className="info-sub-box">
-              <h4 className="break-keep">{lang === 'ja' ? '電子印鑑・署名・黒塗り & OCR・QR' : 'Sign, Stamp, Redact & OCR / QR'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? '処理タブの3モード切替 ＆ 自動復元機能' : '3-Mode Tab Behavior & Auto Recovery'}</h4>
               <p>
                 {lang === 'ja'
-                  ? '丸印・角印（均等割付）・日付印の即時生成とPDF捺印、手書き署名、機密箇所の黒塗りマスキング、ブラウザ内OCR文字認識、QRコード生成・カメラ読取に対応。'
-                  : 'Instant generation of Japanese stamps, digital signatures, blackout redaction, client-side OCR text extraction, and QR code generation/scanning.'}
+                  ? 'タブが動いて迷わない「最適タブへ自動スクロール（順番固定）」、使用頻度と拡張子に基づく「順番自動並び替え」、完全に固定する「オフ」の3種類を選択可能。不意のリロード時もキュー内ファイルを自動復元します。'
+                  : 'Switch between Auto-Scroll to Matching Tab (fixed order), Dynamic Reordering by usage & file type, or Off (manual only). Pending files auto-recover after reloads.'}
               </p>
             </div>
             <div className="info-sub-box">
-              <h4 className="break-keep">{lang === 'ja' ? '文書差分比較 & ZIP一括リネーム' : 'Document Diff & ZIP Archive Toolkit'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? 'オフラインPWA・Google Drive連携・端末間引き継ぎ' : 'Offline Pack, Google Drive & Device Backup'}</h4>
               <p>
                 {lang === 'ja'
-                  ? '2つの文書（テキスト・コード・PDF・Word）を行単位・単語単位で高速差分比較しHTMLレポートを出力。複数ファイルのZIP圧縮・解凍・一括リネームも提供します。'
-                  : 'Side-by-side and unified text/document diff comparison with HTML export, plus multi-file ZIP compression, extraction, and batch renaming.'}
+                  ? 'スタンドアロン版HTMLのオフラインパック生成・PWAインストール、公式OAuth 2.0によるGoogle Drive直接読込/保存、別PCやスマートフォンへ作業内容を引き継げるバックアップ書き出し/復元に対応しています。'
+                  : 'Download a standalone Offline Pack or install as a PWA, import/save directly with Google Drive OAuth 2.0, and package drafts/queues for seamless cross-device handoff.'}
               </p>
             </div>
           </div>
@@ -795,22 +894,22 @@ export default function App() {
             <span>
               <strong>{lang === 'ja' ? '入力形式: ' : 'Input: '}</strong>
               {lang === 'ja'
-                ? 'PDF, Word (DOCX), Excel (XLSX, XLS), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), テキスト (TXT), 画像 (PNG, JPG, WebP, BMP, SVG, ICO, GIF), ZIP'
-                : 'PDF, Word (DOCX), Excel (XLSX, XLS), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), Plain Text (TXT), Images (PNG, JPG, WebP, BMP, SVG, ICO, GIF), ZIP'}
+                ? 'PDF, Word (DOCX), Excel (XLSX, XLS), PowerPoint (PPTX), CSV, TSV, JSON, XML, HTML, Markdown (MD), テキスト (TXT), 画像 (PNG, JPG, WebP, BMP, SVG, ICO, GIF), ZIP ／ メタデータ解析・プレビュー対応: MP4, MOV, M4A, WebM, MP3, WAV'
+                : 'PDF, Word (DOCX), Excel (XLSX, XLS), PowerPoint (PPTX), CSV, TSV, JSON, XML, HTML, Markdown (MD), Plain Text (TXT), Images (PNG, JPG, WebP, BMP, SVG, ICO, GIF), ZIP / Metadata & Preview: MP4, MOV, M4A, WebM, MP3, WAV'}
             </span>
             <br />
             <span>
               <strong>{lang === 'ja' ? '出力形式: ' : 'Output: '}</strong>
               {lang === 'ja'
-                ? 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), テキスト (TXT), 画像 (PNG, JPG, WebP, BMP, ICO), ZIP'
-                : 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), Plain Text (TXT), Images (PNG, JPG, WebP, BMP, ICO), ZIP'}
+                ? 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), テキスト (TXT), 画像 (PNG, JPG, WebP, BMP, ICO), ZIP, メタデータ編集／削除済みオリジナル形式ファイル'
+                : 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), Plain Text (TXT), Images (PNG, JPG, WebP, BMP, ICO), ZIP, and metadata-edited or scrubbed original files'}
             </span>
             <br />
             <span>
-              <strong>{lang === 'ja' ? '推奨環境: ' : 'Recommended Browsers: '}</strong>
+              <strong>{lang === 'ja' ? '推奨動作環境・権限: ' : 'Recommended Browsers & Permissions: '}</strong>
               {lang === 'ja'
-                ? 'Google Chrome, Microsoft Edge, Apple Safari, Mozilla Firefox（最新版）'
-                : 'Google Chrome, Microsoft Edge, Apple Safari, Mozilla Firefox (Latest)'}
+                ? 'Google Chrome, Microsoft Edge, Apple Safari, Mozilla Firefox（各最新版、WebAssembly / Canvas対応）。※QRコードのカメラ読取にはカメラ権限、Google Drive直接連携にはGoogleアカウント認証が必要です（いずれも任意利用）。'
+                : 'Latest Google Chrome, Microsoft Edge, Apple Safari, or Mozilla Firefox with WebAssembly & Canvas support. Camera permission (optional, for QR scanning) and Google OAuth sign-in (optional, for Google Drive) run locally in the browser.'}
             </span>
           </div>
 
@@ -821,22 +920,29 @@ export default function App() {
             <li>
               <span>
                 {lang === 'ja'
-                  ? '最上部の「1. 処理するファイルの読み込み・追加」からファイルやフォルダ、またはGoogle Driveから追加します。'
-                  : 'Add files/folders or import from Google Drive in Section 1 above.'}
+                  ? '最上部の「1. 処理するファイルの読み込み・追加」からファイル・フォルダを選択、または画面上へドラッグ＆ドロップ／Google Driveから読み込みます。'
+                  : 'Load files or folders via Section 1, drag & drop anywhere onto the window, or import directly from Google Drive.'}
               </span>
             </li>
             <li>
               <span>
                 {lang === 'ja'
-                  ? 'タブバーから行いたい処理（一括変換、PDF編集、Office変換、電子印鑑、OCRなど）を選択します。'
-                  : 'Select your desired operation from the tab bar below Section 1.'}
+                  ? 'タブバー右上の「タブ表示」メニューで「最適タブへ自動スクロール（順番固定）」「使用状況・拡張子で並び替え」「オフ」の好みのモードを選び、目的の処理タブを開きます。'
+                  : 'Choose your preferred tab behavior above the tab bar (Auto-Scroll with fixed order, Reorder by usage & extension, or Off) and select the target suite.'}
               </span>
             </li>
             <li>
               <span>
                 {lang === 'ja'
-                  ? '処理完了後、個別に「保存」「Google Drive保存」または「一括ZIPダウンロード」を実行します。'
-                  : 'After processing, download files individually, save directly to Google Drive, or batch download as a ZIP package.'}
+                  ? 'PDF編集・マークアップ（テキストボックス追加・黒塗り・電子印鑑）、Office/データ表変換、画像編集、HTML/Markdown編集、OCR・QR、差分比較、メタデータ・C2PA検査/全項目編集・リスク確認、ZIP処理を実行します。'
+                  : 'Run your edits or conversions: PDF markup & text boxes, electronic stamps, Office/data table conversion, image editing, HTML/Markdown preview, OCR/QR, diff comparison, full metadata/C2PA inspection & editing, or ZIP packaging.'}
+              </span>
+            </li>
+            <li>
+              <span>
+                {lang === 'ja'
+                  ? '最下部の処理ステータス一覧で進捗を確認し、「プレビュー」「保存」「Google Drive保存」「一括ZIPダウンロード」または「端末間バックアップ」で成果物や作業状態を持ち出せます。'
+                  : 'Track real-time progress in the Status Queue below to preview, download individually, save to Google Drive, export a batch ZIP, or create a cross-device workspace backup.'}
               </span>
             </li>
           </ol>
@@ -852,49 +958,85 @@ export default function App() {
             </summary>
             <div className="faq-content">
               {lang === 'ja'
-                ? 'はい、100%ユーザーのブラウザ内（クライアントサイド）だけで処理が行われます。インターネットを介して外部サーバーにファイルがアップロードされることは一切ありませんので、プライベートなファイルも安心して変換できます。'
-                : 'Yes. Processing runs 100% inside your browser via client-side WebAssembly. No files ever leave your device.'}
+                ? 'はい、100%ユーザーのブラウザ内（クライアントサイド）だけで処理が行われます。インターネットを介して外部サーバーにファイルがアップロードされることは一切ありませんので、機密文書やプライベートな画像も安心して処理できます（Google Drive連携を選択した場合のみ、端末とGoogleサーバー間で直接OAuth通信を行います）。'
+                : 'Yes. Processing runs 100% inside your browser via client-side WebAssembly and JavaScript. No files ever leave your device except when you explicitly choose to import from or save to Google Drive via direct browser OAuth.'}
             </div>
           </details>
 
           <details className="faq-details">
             <summary className="faq-summary">
-              <span>{lang === 'ja' ? 'Q2: 変換できるファイルの容量や個数に制限はありますか？' : 'Q2: Are there limits on file sizes or counts?'}</span>
+              <span>{lang === 'ja' ? 'Q2: 処理できるファイルの容量や個数に制限はありますか？' : 'Q2: Are there limits on file sizes or counts?'}</span>
               <span>▼</span>
             </summary>
             <div className="faq-content">
               {lang === 'ja'
-                ? 'サーバー側の制限はありませんが、お使いの端末のメモリ（RAM）容量に依存します。非常に大容量のファイルや多数のファイルを一度に処理する場合、ブラウザのメモリ不足によりエラーが発生する可能性があります。'
-                : 'There are no server limits; processing is limited only by your device\'s available RAM memory.'}
+                ? 'サーバー側の回数制限や容量制限はありませんが、お使いの端末のメモリ（RAM）容量に依存します。非常に大容量のファイルや多数の高解像度PDF/画像を一度に処理する場合は、分割して実行することをおすすめします。'
+                : 'There are no server caps; performance depends on your device RAM. For very large files or many high-resolution pages, processing in smaller batches is recommended.'}
             </div>
           </details>
 
           <details className="faq-details">
             <summary className="faq-summary">
-              <span>{lang === 'ja' ? 'Q3: オフライン環境でも使えますか？' : 'Q3: Can I use this app completely offline?'}</span>
+              <span>{lang === 'ja' ? 'Q3: オフライン環境や別端末への引き継ぎは可能ですか？' : 'Q3: Can I work offline or continue on another device?'}</span>
               <span>▼</span>
             </summary>
             <div className="faq-content">
               {lang === 'ja'
-                ? 'はい。「オフライン用パックを取得」ボタンからダウンロードしていただくことで、インターネット接続がない環境でもローカルで快適にご利用いただけます。'
-                : 'Yes. Click "Offline Pack" to download the local package for complete offline capability.'}
+                ? 'はい。上部の「オフライン用パックを取得」からスタンドアロンHTMLと起動バッチをダウンロードすればネット接続なしで動作します。また「作業バックアップ・別端末引き継ぎ」を使えば、現在のファイルキュー・履歴・HTML/Markdownドラフトを1ファイルにまとめて別PCやスマートフォンへ移行できます。'
+                : 'Yes. Download a standalone Offline Pack from the header for internet-free use, or export a Workspace Backup package to transfer queued files, history, and drafts to another computer or phone.'}
             </div>
           </details>
 
           <details className="faq-details">
             <summary className="faq-summary">
-              <span>{lang === 'ja' ? 'Q4: HTMLファイルのプレビューや変換は可能ですか？' : 'Q4: Can I preview and convert HTML files?'}</span>
+              <span>{lang === 'ja' ? 'Q4: HTML・Markdownのプレビューや各種形式への出力はできますか？' : 'Q4: Can I preview HTML/Markdown and export them?'}</span>
               <span>▼</span>
             </summary>
             <div className="faq-content">
               {lang === 'ja'
-                ? 'はい。読み込んだHTMLファイルは、安全なサンドボックス内でのWebページ表示プレビューおよびソースコード表示の両方に対応しています。PDFへの変換やテキスト抽出も可能です。'
-                : 'Yes. HTML files can be previewed as live rendered pages in a sandboxed iframe or as raw source code, and converted to PDF or text.'}
+                ? 'はい。「HTML・Markdown」タブでは安全なサンドボックス内でのライブ表示プレビュー、ソースコード編集、シンタックスチェックに加え、PDF・高精細PNG画像・テキスト・DOCX等への出力に対応しています。'
+                : 'Yes. The HTML & Markdown tab supports sandboxed live rendering, source editing, and export to PDF, high-DPI PNG images, plain text, and DOCX.'}
+            </div>
+          </details>
+
+          <details className="faq-details">
+            <summary className="faq-summary">
+              <span>{lang === 'ja' ? 'Q5: PDFに日本語のテキストボックスやマークアップ、電子印鑑を追加できますか？' : 'Q5: Can I add Japanese text boxes, markups, and stamps to PDFs?'}</span>
+              <span>▼</span>
+            </summary>
+            <div className="faq-content">
+              {lang === 'ja'
+                ? 'はい。「PDF編集・整理」内の「マークアップ・テキスト追加」および「電子印鑑・署名・PDF注釈」タブの両方で対応しています。日本語や改行を含むテキストボックス、蛍光ハイライト、フリーハンドペン、矩形・楕円・矢印・直線、番号スタンプ、黒塗りをページ上にドラッグ配置して保存でき、1操作ずつ元に戻すことも可能です。'
+                : 'Yes. Both PDF Toolkit (Markup & Text tab) and Sign & PDF Markup let you place Japanese/multiline text boxes, highlights, freehand ink, shapes, arrows, numbered callouts, stamps, handwritten signatures, and blackouts directly onto PDF pages with undo support.'}
+            </div>
+          </details>
+
+          <details className="faq-details">
+            <summary className="faq-summary">
+              <span>{lang === 'ja' ? 'Q6: メタデータ・C2PA機能ではどのような項目の編集とリスク確認ができますか？' : 'Q6: What metadata and C2PA edits and risk checks are supported?'}</span>
+              <span>▼</span>
+            </summary>
+            <div className="faq-content">
+              {lang === 'ja'
+                ? '「メタデータ・C2PA」タブでは、単体・複数ファイルのファイル名・名前上の拡張子・作成/更新日時・GPS位置情報・C2PA(Content Credentials)に加え、検出されたすべてのEXIF/JPEGコメント/PNGチャンク(tEXt・iTXt・eXIf等)/PDF辞書・XMP/Officeプロパティ/MP4・MOV・M4A/HTML・SVGタグをその場で直接編集または一括削除できます。各項目には「何を設定しているデータか」と「変更・削除することで起きうるリスク（表示互換性低下、C2PA暗号署名無効化、時刻ズレ等）」の説明が表示されます。'
+                : 'In Metadata & C2PA, you can inspect, inline-edit, or strip filenames, extensions, timestamps, GPS coordinates, C2PA manifests, and every detected EXIF, PNG, PDF, XMP, Office, MP4/MOV/M4A, and HTML/SVG tag across single or multiple files. Every field shows what it controls and potential modification risks (e.g., invalidating C2PA cryptographic signatures or breaking viewer compatibility).'}
+            </div>
+          </details>
+
+          <details className="faq-details">
+            <summary className="faq-summary">
+              <span>{lang === 'ja' ? 'Q7: ファイルを追加したときの処理タブの自動並び替えやスクロールを切り替えられますか？' : 'Q7: Can I change or disable automatic tab reordering or scrolling?'}</span>
+              <span>▼</span>
+            </summary>
+            <div className="faq-content">
+              {lang === 'ja'
+                ? 'はい。タブバー右上の「タブ表示」メニューからいつでも3種類を切り替えられます。(1)「最適タブへ自動スクロール（順番固定）」: タブの位置を変えずに対応するタブへスクロール表示、(2)「使用状況・拡張子で順番を並び替え」: よく使うタブや拡張子に合うタブを左へ移動、(3)「オフ」: 順番固定のまま自動移動も行いません。'
+                : 'Yes. Use the "Tab Behavior" dropdown right above the tab strip to choose among three modes: Auto-Scroll to Match (keeps tab positions fixed), Reorder by Usage & Extension, or Off (completely manual).'}
             </div>
           </details>
         </div>
 
-        {/* Footer with updated proper links */}
+        {/* Footer with accurate library links */}
         <div className="footer">
           <div className="footer-links">
             <a onClick={() => setIsTermsOpen(true)} id="linkTermsTrigger">
@@ -910,16 +1052,16 @@ export default function App() {
               WebAssembly
             </a>
             ,{' '}
-            <a href="https://ffmpeg.org/" target="_blank" rel="noopener noreferrer">
-              FFmpeg.wasm
+            <a href="https://pdf-lib.js.org/" target="_blank" rel="noopener noreferrer">
+              PDF-Lib
+            </a>
+            ,{' '}
+            <a href="https://mozilla.github.io/pdf.js/" target="_blank" rel="noopener noreferrer">
+              PDF.js
             </a>
             ,{' '}
             <a href="https://stuk.github.io/jszip/" target="_blank" rel="noopener noreferrer">
               JSZip
-            </a>
-            ,{' '}
-            <a href="https://pdf-lib.js.org/" target="_blank" rel="noopener noreferrer">
-              PDF-Lib
             </a>{' '}
             &amp;{' '}
             <a href="https://tesseract.projectnaptha.com/" target="_blank" rel="noopener noreferrer">
@@ -948,16 +1090,16 @@ export default function App() {
                 <div className="terms-split-box">
                   <h5>{lang === 'ja' ? '利用規約' : 'Terms of Service'}</h5>
                   <div style={{ fontSize: '0.78rem', lineHeight: '1.5' }}>
-                    <p><strong>{lang === 'ja' ? '第1条（適用）' : 'Art 1: Scope'}</strong><br />{lang === 'ja' ? '本ツールが提供するすべてのファイル変換・編集機能の利用条件を定めます。' : 'Applies to all conversion and editing services provided by this tool.'}</p>
-                    <p style={{ marginTop: '6px' }}><strong>{lang === 'ja' ? '第2条（著作権の遵守）' : 'Art 2: Copyright'}</strong><br />{lang === 'ja' ? '自らが適法な権利・許諾を有するファイルのみを処理対象としてください。' : 'Only process files you own or are legally authorized to convert.'}</p>
-                    <p style={{ marginTop: '6px' }}><strong>{lang === 'ja' ? '第3条（免責事項）' : 'Art 3: Disclaimer'}</strong><br />{lang === 'ja' ? '完全ローカル処理で動作し、データ破損等の責任は負いません（事前バックアップ推奨）。' : 'Runs 100% client-side; developers assume no liability for data loss.'}</p>
+                    <p><strong>{lang === 'ja' ? '第1条（適用）' : 'Art 1: Scope'}</strong><br />{lang === 'ja' ? '本ツールが提供するPDF編集・注釈、Office変換、画像処理、メタデータ・C2PA編集、OCR等の利用条件を定めます。' : 'Applies to all PDF editing/markup, Office conversion, image, metadata/C2PA, and OCR features provided by this tool.'}</p>
+                    <p style={{ marginTop: '6px' }}><strong>{lang === 'ja' ? '第2条（権利・法令遵守と不正改変の禁止）' : 'Art 2: Lawful Use & Provenance'}</strong><br />{lang === 'ja' ? '適法な権利を有するファイルのみを扱い、電子印鑑やC2PA・日時の不正な偽装・悪用は行わないものとします。' : 'Only process files you are authorized to edit, and never falsify stamps, C2PA credentials, or timestamps maliciously.'}</p>
+                    <p style={{ marginTop: '6px' }}><strong>{lang === 'ja' ? '第3条（免責事項）' : 'Art 3: Disclaimer'}</strong><br />{lang === 'ja' ? '完全ローカル処理で動作し、データ破損やメタデータ改変による互換性・署名失効等の責任は負いません（事前バックアップ推奨）。' : 'Runs 100% locally; developers assume no liability for data loss, compatibility changes, or invalidated signatures.'}</p>
                   </div>
                 </div>
                 <div className="terms-split-box">
                   <h5>{lang === 'ja' ? 'プライバシーポリシー' : 'Privacy Policy'}</h5>
                   <div style={{ fontSize: '0.78rem', lineHeight: '1.5' }}>
-                    <p><strong>{lang === 'ja' ? '1. 完全端末内処理（サーバー非送信）' : '1. 100% Local Browser Execution'}</strong><br />{lang === 'ja' ? 'WASMによりブラウザ内でのみ処理され、ファイルが外部サーバーに送信されることは一切ありません。' : 'Files are processed strictly in your browser via WASM with zero server uploads.'}</p>
-                    <p style={{ marginTop: '6px' }}><strong>{lang === 'ja' ? '2. Google Drive直接通信' : '2. Google Drive Direct HTTPS'}</strong><br />{lang === 'ja' ? '公式OAuth 2.0を用いてユーザーの端末とGoogle間で直接通信します。' : 'Direct encrypted communication between browser and Google Drive.'}</p>
+                    <p><strong>{lang === 'ja' ? '1. 完全端末内処理（サーバー非送信）' : '1. 100% Local Browser Execution'}</strong><br />{lang === 'ja' ? 'PDF・Office・画像・メタデータ・OCR・カメラQR映像はブラウザ内のみで処理され、外部サーバーへ送信されません。' : 'All document, image, metadata, OCR, and camera QR processing stays strictly inside your browser.'}</p>
+                    <p style={{ marginTop: '6px' }}><strong>{lang === 'ja' ? '2. 端末内保存・Google Drive直接通信' : '2. Local Storage & Google Drive Direct'}</strong><br />{lang === 'ja' ? '設定・タブ表示設定/利用統計・作業キューは端末内のみに保存し、Drive連携時は公式OAuth 2.0でGoogleへ直接通信します。' : 'Preferences, tab settings/usage, and drafts stay in device storage; Drive sync connects directly via official OAuth 2.0.'}</p>
                   </div>
                 </div>
               </div>
@@ -1007,10 +1149,11 @@ export default function App() {
       {isTutorialOpen && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-lg w-[94vw] bg-white dark:bg-slate-900 border-2 border-blue-500 shadow-2xl rounded-2xl p-5 animate-fade-in flex flex-col gap-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800">
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className="text-xs font-bold text-blue-600 dark:text-blue-400 tabular-nums whitespace-nowrap">
                 {lang === 'ja' ? `手順 ${currentTutorialStep + 1} / ${tutorialSteps.length}` : `Step ${currentTutorialStep + 1} / ${tutorialSteps.length}`}
               </span>
+              <span className="text-slate-300 dark:text-slate-700 text-xs" aria-hidden="true">·</span>
               <h4 className="font-bold text-sm sm:text-base text-slate-800 dark:text-slate-100">
                 {lang === 'ja' ? tutorialSteps[currentTutorialStep].titleJa : tutorialSteps[currentTutorialStep].titleEn}
               </h4>
@@ -1129,56 +1272,56 @@ export default function App() {
                   <p><strong>{lang === 'ja' ? '第1条（適用）' : 'Article 1 (Scope & Application)'}</strong></p>
                   <p className="text-slate-600 dark:text-slate-300">
                     {lang === 'ja'
-                      ? '本規約は、Universal Media & Document Studio Pro（以下「本ツール」）の利用に関する条件を定めるものです。利用者は本ツールの利用により本規約に同意したものとみなされます。'
-                      : 'These Terms of Service set forth the terms and conditions for using Universal Media & Document Studio Pro (hereinafter referred to as "the Tool").'}
+                      ? '本規約は、Universal Media & Document Studio Pro（以下「本ツール」）が提供するPDF編集・マークアップ・注釈・墨消し、Office・データ表変換、画像編集、HTML/Markdown編集、電子印鑑・署名、OCR・QR、差分比較、メタデータ・C2PA検査/編集/削除、ZIP処理、作業バックアップおよびオフラインパック等すべての機能の利用条件を定めるものです。利用者は本ツールの利用により本規約に同意したものとみなされます。'
+                      : 'These Terms of Service govern all features of Universal Media & Document Studio Pro ("the Tool"), including PDF editing/markup/redaction, Office & data table conversion, image editing, HTML/Markdown studio, stamps & signatures, OCR/QR, diff comparison, metadata & C2PA inspection/editing/removal, ZIP archiving, workspace backup, and offline packs.'}
                   </p>
                 </div>
                 <div>
-                  <p><strong>{lang === 'ja' ? '第2条（著作権・権利の遵守）' : 'Article 2 (Compliance with Copyright & Intellectual Property)'}</strong></p>
+                  <p><strong>{lang === 'ja' ? '第2条（著作権・権利および法令遵守）' : 'Article 2 (Intellectual Property & Legal Compliance)'}</strong></p>
                   <p className="text-slate-600 dark:text-slate-300">
                     {lang === 'ja'
-                      ? '利用者は、著作権法およびその他の知的財産権関連法令を遵守し、自らが権利を有するファイル、または正当な許諾を得たファイルのみを本ツールの変換・編集対象とするものとします。'
-                      : 'Users must strictly comply with copyright laws and other intellectual property regulations, and shall only process files for which they own the copyright or have obtained legitimate authorization.'}
+                      ? '利用者は、著作権法・不正アクセス禁止法その他の関係法令を遵守し、自らが適法な権利を有するファイル、または正当な許諾を得たファイルのみを本ツールの変換・編集・メタデータ変更対象とするものとします。'
+                      : 'Users must comply with copyright and all applicable laws, processing and modifying only files for which they hold lawful ownership or valid permission.'}
                   </p>
                 </div>
                 <div>
-                  <p><strong>{lang === 'ja' ? '第3条（禁止事項）' : 'Article 3 (Prohibited Actions)'}</strong></p>
+                  <p><strong>{lang === 'ja' ? '第3条（禁止事項および電子署名の適正利用）' : 'Article 3 (Prohibited Conduct & Provenance Integrity)'}</strong></p>
                   <p className="text-slate-600 dark:text-slate-300">
                     {lang === 'ja'
-                      ? '違法動画・音声・ドキュメントの作成、第三者の権利侵害、法令または公序良俗に反する行為、本ツールの不正解析・改変・再配布を禁止します。'
-                      : 'Creating unlawful video, audio, or document files, infringing upon third-party rights, committing acts that violate laws or public order and morals, or unauthorized reverse-engineering and modification of the Tool are strictly prohibited.'}
+                      ? '不正・違法なドキュメントや画像の生成、電子印鑑・署名・PDF注釈・作成日時・GPS・C2PA(Content Credentials)等メタデータの不正偽装や公的証跡の改ざん、第三者の権利侵害、公序良俗に反する利用、本ツールの不正解析・改変・営利目的の無断再配布を禁止します。'
+                      : 'Creating unlawful files, maliciously falsifying electronic stamps, signatures, timestamps, GPS, or C2PA Content Credentials, infringing third-party rights, or reverse-engineering and redistributing the Tool without authorization are strictly prohibited.'}
                   </p>
                 </div>
                 <div>
-                  <p><strong>{lang === 'ja' ? '第4条（免責事項）' : 'Article 4 (Disclaimer of Liability)'}</strong></p>
+                  <p><strong>{lang === 'ja' ? '第4条（メタデータ変更・黒塗り・署名に関する免責事項）' : 'Article 4 (Disclaimer of Liability)'}</strong></p>
                   <p className="text-slate-600 dark:text-slate-300">
                     {lang === 'ja'
-                      ? '本ツールの利用により生じたデータの破損、消失、端末の不具合、その他の損害について、開発者および運営者は一切の法的責任を負いません。重要なファイルは必ずバックアップを作成の上ご利用ください。'
-                      : 'The developer and operators assume no legal liability for any data corruption, data loss, device malfunction, or any other damages resulting from the use of the Tool. Users are strongly advised to back up critical files before use.'}
+                      ? '本ツールの利用により生じたデータ破損・消失、端末の不具合、メタデータやC2PA情報の編集・削除に伴うデジタル署名の無効化やファイル互換性低下、黒塗り設定ミスによる情報漏洩等の損害について、開発者および運営者は一切の法的責任を負いません。編集前に必ず元ファイルのバックアップを作成し、出力結果を直接ご確認ください。'
+                      : 'Developers assume no liability for data loss, device issues, invalidated C2PA/digital signatures or viewer compatibility changes caused by metadata editing/removal, or incomplete redactions. Always back up originals and inspect exported files before sharing.'}
                   </p>
                 </div>
                 <div>
-                  <p><strong>{lang === 'ja' ? '第5条（AI生成コード・コンテンツに関する免責）' : 'Article 5 (Disclaimer Regarding AI-Assisted Code & Content)'}</strong></p>
+                  <p><strong>{lang === 'ja' ? '第5条（出力結果および動作保証について）' : 'Article 5 (Warranty & Output Accuracy)'}</strong></p>
                   <p className="text-slate-600 dark:text-slate-300">
                     {lang === 'ja'
-                      ? '本ツールはAI技術の支援を受けて開発されたコードを含んでおり、提供する変換・編集機能や出力結果の完全性、正確性、特定目的への適合性を明示的にも黙示的にも保証するものではありません。'
-                      : 'This Tool contains code developed with the assistance of AI technologies. Neither the developer nor operators make any express or implied warranty regarding the completeness, accuracy, or fitness for a particular purpose of the features or outputs.'}
+                      ? '本ツールが提供する変換・OCR・注釈・編集機能および出力結果の完全性、正確性、法的効力、特定目的への適合性について、開発者は明示的にも黙示的にも保証するものではありません。'
+                      : 'No express or implied warranty is given regarding completeness, OCR/conversion accuracy, legal validity of electronic stamps/signatures, or fitness for a particular purpose.'}
                   </p>
                 </div>
                 <div>
-                  <p><strong>{lang === 'ja' ? '第6条（サービスの変更・終了）' : 'Article 6 (Modification & Discontinuation of Service)'}</strong></p>
+                  <p><strong>{lang === 'ja' ? '第6条（サービスの変更・終了）' : 'Article 6 (Modification & Discontinuation)'}</strong></p>
                   <p className="text-slate-600 dark:text-slate-300">
                     {lang === 'ja'
                       ? '本ツールは事前通知なく機能の変更、提供の中断または終了を行うことがあります。'
-                      : 'Features of the Tool may be modified, suspended, or discontinued at any time without prior notice.'}
+                      : 'Features of the Tool may be updated, suspended, or discontinued at any time without prior notice.'}
                   </p>
                 </div>
                 <div>
-                  <p><strong>{lang === 'ja' ? '第7条（準拠法・管轄）' : 'Article 7 (Governing Law & Jurisdiction)'}</strong></p>
+                  <p><strong>{lang === 'ja' ? '第7条（準拠法・管轄）' : 'Article 7 (Governing Law)'}</strong></p>
                   <p className="text-slate-600 dark:text-slate-300">
                     {lang === 'ja'
                       ? '本規約の解釈にあたっては、日本法を準拠法とします。'
-                      : 'The interpretation and application of these Terms of Service shall be governed by the laws of Japan.'}
+                      : 'These Terms of Service shall be governed by and construed in accordance with the laws of Japan.'}
                   </p>
                 </div>
               </div>
@@ -1211,24 +1354,32 @@ export default function App() {
                   <p><strong>{lang === 'ja' ? '1. 完全ローカル（端末内）処理の原則' : '1. Principle of 100% Local (On-Device) Processing'}</strong></p>
                   <p className="text-slate-600 dark:text-slate-300">
                     {lang === 'ja'
-                      ? '本ツールはWebAssembly技術を用い、すべての動画・音声変換、波形解析、メタタグ編集、PDF編集、Office文書変換、画像処理、OCR、HTML編集・プレビュー、差分比較、ZIP処理をユーザーのブラウザ（端末内）で完結して実行します。処理対象のファイルデータが外部サーバーへアップロードまたは送信されることは一切ありません。'
-                      : 'This Tool leverages WebAssembly technology to execute all video/audio conversion, waveform analysis, metadata editing, PDF manipulation, Office documents, OCR, HTML editing, diff comparison, and ZIP archiving entirely within the user’s browser on the local device. Target file data is never uploaded or transmitted to any external server under any circumstances.'}
+                      ? '本ツールはWebAssemblyおよびクライアントサイドJavaScript技術を用い、PDF編集・マークアップ・テキスト追加・黒塗り、Office・データ表変換、画像編集・形式変換、電子印鑑・手書き署名、OCR文字認識、HTML/Markdown編集・プレビュー、差分比較、メタデータ（EXIF/GPS/PNG/PDF/Office/XMP/MP4等）・C2PAの検査/編集/削除、ZIP処理をユーザーのブラウザ（端末内）だけで完結して実行します。処理対象のファイルデータが外部サーバーへアップロードまたは保存されることは一切ありません。'
+                      : 'Using WebAssembly and client-side JavaScript, the Tool performs PDF editing/markup/redaction, Office & data table conversion, image editing, digital stamps/signatures, OCR, HTML/Markdown editing & preview, diff comparison, metadata/C2PA inspection/editing/removal, and ZIP archiving entirely inside your browser. Target file data is never uploaded to or stored on external servers.'}
                   </p>
                 </div>
                 <div>
                   <p><strong>{lang === 'ja' ? '2. ローカルストレージおよびIndexedDBの利用' : '2. Use of LocalStorage and IndexedDB'}</strong></p>
                   <p className="text-slate-600 dark:text-slate-300">
                     {lang === 'ja'
-                      ? '本ツールはお客様の利便性向上のため、言語・テーマ等の設定値および変換・処理結果のキャッシュを端末内のローカルストレージ（LocalStorage / IndexedDB）にのみ保存します。これらはブラウザの設定またはツール内の消去機能によりいつでも削除できます。'
-                      : 'To enhance user convenience, user preferences (such as language and theme) and conversion output caches are saved strictly within local storage on your device (LocalStorage / IndexedDB). These can be deleted at any time via browser settings or the cache clearing button in the Tool.'}
+                      ? '本ツールは利用者の利便性およびセッション復元のため、言語・テーマ設定、処理タブの連動モード設定およびタブ利用頻度スコア（自動並び替え用）、未処理ファイルの復旧キュー、処理履歴、HTML/Markdownドラフト・スナップショットを端末内のLocalStorageおよびIndexedDBにのみ保存します。これらは外部送信されず、ブラウザ設定またはツール内のキャッシュ消去機能・バックアップ機能からいつでも削除・管理できます。'
+                      : 'For convenience and crash/reload recovery, language/theme preferences, tab adaptive mode and tab usage counts, pending file recovery queues, conversion history, and HTML/Markdown drafts are stored strictly on your device via LocalStorage and IndexedDB. Nothing is transmitted externally, and all stored data can be cleared anytime via browser settings or in-app controls.'}
                   </p>
                 </div>
                 <div>
-                  <p><strong>{lang === 'ja' ? '3. 外部ライブラリの読み込み & Google Drive直接通信' : '3. External Library Loading & Google Drive Direct Communication'}</strong></p>
+                  <p><strong>{lang === 'ja' ? '3. カメラ等端末権限の取り扱い（QRコード読取）' : '3. Camera & Device Permissions (QR Scanning)'}</strong></p>
                   <p className="text-slate-600 dark:text-slate-300">
                     {lang === 'ja'
-                      ? 'アプリの実行に必要なコアライブラリ（FFmpeg WASM、PDF-Lib、JSZip等）およびCDNリソースのロード時、ならびに公式Google Identity Servicesを介したGoogle Driveダイレクト通信を除き、利用者の個人情報や行動履歴をトラッキングまたは外部送信することはありません。'
-                      : 'Except for loading the necessary WASM core libraries and CDN resources required to run the application, as well as direct encrypted communication with Google Drive via official Google Identity Services, the Tool does not collect, track, or externally transmit any personal information or behavioral history of users.'}
+                      ? 'OCR・QRタブの「カメラでスキャン」機能を利用する場合にのみブラウザへカメラ権限を要求します。取得したカメラ映像フレームは端末メモリ上でリアルタイムにQRコード文字列をデコードするためだけに使用され、録画・保存・外部サーバーへの送信は一切行われません。'
+                      : 'Camera access is requested solely when you explicitly start the QR scanner. Video frames are decoded strictly in local memory and are never recorded, persisted, or uploaded.'}
+                  </p>
+                </div>
+                <div>
+                  <p><strong>{lang === 'ja' ? '4. Google Drive直接連携 ＆ 外部ライブラリ読み込み' : '4. Google Drive Direct OAuth 2.0 & External Libraries'}</strong></p>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    {lang === 'ja'
+                      ? '利用者が明示的にGoogle Driveからの読み込みまたは保存を実行した場合に限り、公式Google Identity Services（OAuth 2.0）を通じてユーザーのブラウザとGoogleサーバー間で直接暗号化通信を行います（開発者の仲介サーバーは経由しません）。またオンライン版では必要なコアライブラリ・OCR言語モデルの取得が行われますが（スタンドアロン・オフラインパックでは外部通信ゼロで動作します）、行動履歴やファイルのトラッキング・収集は一切行いません。'
+                      : 'Only when you explicitly connect Google Drive does the Tool establish a direct encrypted OAuth 2.0 connection from your browser to Google APIs (with no intermediary server). Online editions fetch required core libraries and OCR language data as needed, while the Standalone Offline Pack operates with zero external network requests. No analytics, profiling, or file tracking is performed.'}
                   </p>
                 </div>
               </div>
@@ -1264,7 +1415,7 @@ export default function App() {
         lang={lang}
         onRetryConnect={() => setIsDriveModalOpen(true)}
         onConnectedSuccess={() => {
-          showToast(lang === 'ja' ? '✓ Google Driveに接続しました' : '✓ Connected to Google Drive');
+          showToast(lang === 'ja' ? 'Google Driveに接続しました' : 'Connected to Google Drive');
         }}
       />
 

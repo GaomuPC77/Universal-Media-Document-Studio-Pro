@@ -1,19 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import {
-  FileText,
-  Layers,
-  Image as ImageIcon,
-  Briefcase,
-  PenTool,
-  ScanText,
-  GitCompare,
-  Archive,
-  Download,
-  Share2,
-  HelpCircle,
-  HardDrive,
-  History,
-} from 'lucide-react';
 
 interface HeaderProps {
   theme: 'auto' | 'light' | 'dark';
@@ -36,7 +21,6 @@ export const Header: React.FC<HeaderProps> = ({
   onDownloadOfflinePack,
   onOpenTutorial,
   onShareApp,
-  onOpenBackup,
 }) => {
   const [currentDateTime, setCurrentDateTime] = useState<string>('--/--/---- --:--:--');
 
@@ -91,7 +75,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Center: Live Date & Time */}
         <div className="header-col-center">
-          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-color)' }} id="headerDatetime">
+          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-color)' }} className="tabular-nums" id="headerDatetime">
             {currentDateTime}
           </div>
         </div>
@@ -133,20 +117,23 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Main Branding Header conforming to Reference HTML */}
+      {/* Main Branding Header */}
       <div className="header">
         <h1>Universal Media &amp; Document Studio Pro</h1>
         <p>
           {lang === 'ja'
-            ? 'サーバーにファイルを送信せず、ブラウザだけで安全・無制限に一括変換できる高度なメディア＆ドキュメント変換ツールです。'
-            : 'Fast, secure client-side media & document converter with 100% private in-browser engine.'}
+            ? 'サーバーにファイルを送信せず、ブラウザだけで安全・無制限に一括変換できるメディア＆ドキュメント変換ツールです。'
+            : 'Fast, secure client-side media & document converter with 100% private in-browser execution.'}
         </p>
-        <div className="badge-group">
-          <span className="badge offline-indicator">OFFLINE EDITION</span>
-          <span className="badge">{lang === 'ja' ? '100% 端末内処理' : '100% Client-Side'}</span>
-          <span className="badge">{lang === 'ja' ? 'Google Drive 純正連携' : 'Google Drive Ready'}</span>
-          <span className="badge">{lang === 'ja' ? 'リアルタイム進捗' : 'Real-time Progress'}</span>
-          <span className="badge">{lang === 'ja' ? '異種形式一括処理' : 'Batch Processor'}</span>
+        <div className="mt-2.5 flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+          <span className="offline-indicator px-2 py-0.5 rounded font-bold text-[11px]">OFFLINE EDITION</span>
+          <span>{lang === 'ja' ? '100% 端末内処理' : '100% Client-Side'}</span>
+          <span aria-hidden="true">·</span>
+          <span>{lang === 'ja' ? 'Google Drive 純正連携' : 'Google Drive Ready'}</span>
+          <span aria-hidden="true">·</span>
+          <span>{lang === 'ja' ? 'リアルタイム進捗' : 'Real-time Progress'}</span>
+          <span aria-hidden="true">·</span>
+          <span>{lang === 'ja' ? '異種形式一括処理' : 'Batch Processor'}</span>
         </div>
       </div>
     </header>

@@ -15,6 +15,7 @@ import {
   Eye,
   ShieldCheck,
   FileCheck,
+  Highlighter,
 } from 'lucide-react';
 import { PdfPageInfo } from '../../types';
 import { getPdfPages, mergePdfs, manipulatePdfPages, enhancePdf, extractPdfText, convertPdfToImages } from '../../utils/pdfUtils';
@@ -23,6 +24,7 @@ import { saveProcessedFile } from '../../utils/historyDb';
 import { FileItem } from '../../types';
 import { notifyCompletion } from '../../utils/notification';
 import { AddToQueuePromptModal } from '../Modals/AddToQueuePromptModal';
+import { PdfMarkupEditor } from '../PdfMarkupEditor';
 
 interface PdfSuiteProps {
   lang: 'ja' | 'en';
@@ -41,7 +43,7 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({
   onShowToast,
   onAddFiles,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'organize' | 'merge' | 'split' | 'watermark' | 'numbering'>('organize');
+  const [activeSubTab, setActiveSubTab] = useState<'organize' | 'markup' | 'merge' | 'split' | 'watermark' | 'numbering'>('organize');
 
   // State for Organize / Delete / Rotate
   const [currentFile, setCurrentFile] = useState<File | null>(null);
@@ -441,6 +443,7 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({
       <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto">
         {[
           { id: 'organize', labelJa: 'ページ削除・回転・整列', labelEn: 'Organize & Delete Pages', icon: Layers },
+          { id: 'markup', labelJa: 'マークアップ・テキスト', labelEn: 'Markup & Text Box', icon: Highlighter },
           { id: 'merge', labelJa: '複数PDF結合', labelEn: 'Merge PDFs', icon: Plus },
           { id: 'split', labelJa: 'PDF分割・抽出', labelEn: 'Split PDF', icon: Scissors },
           { id: 'watermark', labelJa: '透かし・ウォーターマーク', labelEn: 'Watermark', icon: Stamp },
@@ -543,7 +546,7 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({
           >
             <option value="">{lang === 'ja' ? '-- アップロードされたPDFを選択 --' : '-- Select Uploaded PDF --'}</option>
             <option value="__upload_new__">
-              {lang === 'ja' ? '📁 ＋ 新しいPDFを端末からアップロード...' : '📁 + Upload New PDF File...'}
+              {lang === 'ja' ? '+ 新しいPDFを端末からアップロード...' : '+ Upload New PDF File...'}
             </option>
             {fileList
               .filter((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'))
@@ -747,6 +750,57 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({
         </div>
       )}
 
+      {/* 1.5 Interactive Markup & Text Box Tab */}
+      {activeSubTab === 'markup' && (
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm flex flex-col gap-4">
+          <div>
+            <h3 className="font-bold text-sm sm:text-base text-slate-800 dark:text-slate-100">
+              {lang === 'ja' ? 'PDFマークアップ・テキストボックス追加' : 'PDF Markup & Text Box Editor'}
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {lang === 'ja'
+                ? 'テキストボックス（日本語・複数行対応）、蛍光マーカー、図形・矢印、フリーハンド、定型注釈、黒塗りをPDF上に直接追加できます。'
+                : 'Add multiline text boxes, highlights, shapes, arrows, freehand drawings, badges, and redactions directly onto PDF pages.'}
+            </p>
+          </div>
+
+          {!currentFile ? (
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 rounded-2xl p-10 flex flex-col items-center justify-center text-center cursor-pointer bg-slate-50/50 dark:bg-slate-900/60 transition"
+            >
+              <div className="w-14 h-14 rounded-2xl bg-blue-100 dark:bg-blue-950 text-blue-600 flex items-center justify-center mb-3">
+                <Highlighter className="w-7 h-7" />
+              </div>
+              <h4 className="font-bold text-slate-800 dark:text-slate-200 text-base">
+                {lang === 'ja' ? 'マークアップするPDFファイルを選択' : 'Select PDF to Add Markup & Text Boxes'}
+              </h4>
+              <p className="text-xs text-slate-500 mt-1">
+                {lang === 'ja'
+                  ? '上部のドロップダウンからアップロード済みPDFを選ぶか、クリックしてPDFを選択してください。'
+                  : 'Choose an uploaded PDF above or click here to browse.'}
+              </p>
+            </div>
+          ) : isLoadingPages ? (
+            <div className="py-16 flex flex-col items-center justify-center gap-3 text-slate-500">
+              <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              <p className="text-xs font-medium">{lang === 'ja' ? 'PDFページを展開中...' : 'Loading PDF pages...'}</p>
+            </div>
+          ) : (
+            <PdfMarkupEditor
+              lang={lang}
+              pdfFile={currentFile}
+              pdfPages={pages}
+              enableStampTool={false}
+              initialTool="textbox"
+              exportFilePrefix="MarkedUp_"
+              onResultReady={onResultReady}
+              onShowToast={onShowToast}
+            />
+          )}
+        </div>
+      )}
+
       {/* 2. Merge Multiple PDFs Tab */}
       {activeSubTab === 'merge' && (
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm flex flex-col gap-5">
@@ -802,8 +856,8 @@ export const PdfSuite: React.FC<PdfSuiteProps> = ({
                   className="flex items-center justify-between p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/50"
                 >
                   <div className="flex items-center gap-3">
-                    <span className="w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 font-bold text-xs flex items-center justify-center">
-                      {idx + 1}
+                    <span className="w-6 text-center font-mono tabular-nums font-bold text-xs text-slate-500 dark:text-slate-400">
+                      {idx + 1}.
                     </span>
                     <div>
                       <h4 className="font-semibold text-xs sm:text-sm text-slate-800 dark:text-slate-200">{item.name}</h4>

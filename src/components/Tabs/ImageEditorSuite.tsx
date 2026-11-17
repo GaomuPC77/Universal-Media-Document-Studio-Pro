@@ -5,7 +5,7 @@ import {
   Type,
   PenTool,
   Sliders,
-  Sparkles,
+  Palette,
   Upload,
   Download,
   Undo2,
@@ -846,7 +846,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
 
   const tools: { id: EditorTool; labelJa: string; labelEn: string; icon: any }[] = [
     { id: 'adjust', labelJa: '色調・コントラスト', labelEn: 'Adjust & Contrast', icon: Sliders },
-    { id: 'filter', labelJa: 'フィルタ効果', labelEn: 'Filters', icon: Sparkles },
+    { id: 'filter', labelJa: 'フィルタ効果', labelEn: 'Filters', icon: Palette },
     { id: 'crop', labelJa: '切り取り・回転', labelEn: 'Crop & Rotate', icon: Crop },
     { id: 'mosaic', labelJa: 'モザイク・ぼかし', labelEn: 'Mosaic & Blur', icon: Grid },
     { id: 'markup', labelJa: 'マークアップ描画', labelEn: 'Markup & Draw', icon: PenTool },
@@ -921,9 +921,10 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
           <div className="flex items-center gap-2">
             <Layers className="w-4 h-4 text-blue-600 dark:text-blue-400" />
             <span className="font-bold text-slate-800 dark:text-slate-200">
-              {lang === 'ja' ? '読み込み済みファイルから画像を選択:' : 'Select Image from Queue:'}
+              {lang === 'ja' ? '読み込み済みファイルから画像を選択' : 'Select Image from Queue'}
             </span>
-            <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-bold">
+            <span className="text-slate-300 dark:text-slate-600" aria-hidden="true">·</span>
+            <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 tabular-nums">
               {availableImageItems.length} {lang === 'ja' ? '件利用可能' : 'available'}
             </span>
           </div>
@@ -949,7 +950,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
           >
             <option value="">{lang === 'ja' ? '-- アップロードされた画像を選択 --' : '-- Select Uploaded Image --'}</option>
             <option value="__upload_new__">
-              {lang === 'ja' ? '📁 ＋ 新しい画像を端末からアップロード...' : '📁 + Upload New Image File...'}
+              {lang === 'ja' ? '+ 新しい画像を端末からアップロード...' : '+ Upload New Image File...'}
             </option>
             {availableImageItems.map((f) => (
               <option key={f.id} value={f.id}>

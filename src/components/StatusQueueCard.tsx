@@ -142,7 +142,7 @@ export const StatusQueueCard: React.FC<StatusQueueCardProps> = ({
           <FileText className="w-4 h-4 text-blue-600" />
           <span>{lang === 'ja' ? '変換・処理ステータス' : 'Conversion & Processing Status'}</span>
         </div>
-        <span id="counterLabel" style={{ fontSize: '0.85rem', color: 'var(--text-sub)' }}>
+        <span id="counterLabel" className="tabular-nums" style={{ fontSize: '0.85rem', color: 'var(--text-sub)' }}>
           {doneCount} / {fileList.length}
         </span>
       </div>
@@ -151,7 +151,7 @@ export const StatusQueueCard: React.FC<StatusQueueCardProps> = ({
       <div className="progress-section">
         <div className="progress-header">
           <span id="progressStatusText">{statusDisplay}</span>
-          <span id="progressPercentText">{progressDisplay}%</span>
+          <span id="progressPercentText" className="tabular-nums">{progressDisplay}%</span>
         </div>
         <div className="progress-bar-bg">
           <div
@@ -182,15 +182,6 @@ export const StatusQueueCard: React.FC<StatusQueueCardProps> = ({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          <span
-            style={{
-              display: 'inline-block',
-              width: '8px',
-              height: '8px',
-              borderRadius: '50%',
-              background: '#10b981',
-            }}
-          ></span>
           <span>{lang === 'ja' ? 'タブを閉じても処理待ち状態を自動保存・復元' : 'Queue auto-saved across browser sessions'}</span>
         </div>
 

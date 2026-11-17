@@ -607,7 +607,7 @@ export const OfficeSuite: React.FC<OfficeSuiteProps> = ({
             >
               <option value="">{lang === 'ja' ? '-- アップロードされたPDFを選択 --' : '-- Select Uploaded PDF --'}</option>
               <option value="__upload_new__">
-                {lang === 'ja' ? '📁 ＋ 新しいPDFを端末からアップロード...' : '📁 + Upload New PDF File...'}
+                {lang === 'ja' ? '+ 新しいPDFを端末からアップロード...' : '+ Upload New PDF File...'}
               </option>
               {fileList
                 .filter((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'))
@@ -718,7 +718,7 @@ export const OfficeSuite: React.FC<OfficeSuiteProps> = ({
             >
               <option value="">{lang === 'ja' ? '-- アップロードされたWord/PDFを選択 --' : '-- Select Word/PDF --'}</option>
               <option value="__upload_new__">
-                {lang === 'ja' ? '📁 ＋ 新しいWord/PDFを端末からアップロード...' : '📁 + Upload New Word/PDF File...'}
+                {lang === 'ja' ? '+ 新しいWord/PDFを端末からアップロード...' : '+ Upload New Word/PDF File...'}
               </option>
               {fileList
                 .filter((f) => ['docx', 'doc', 'pdf'].includes(f.format) || f.name.toLowerCase().endsWith('.docx'))
@@ -800,7 +800,7 @@ export const OfficeSuite: React.FC<OfficeSuiteProps> = ({
             >
               <option value="">{lang === 'ja' ? '-- アップロードされたExcel/CSVを選択 --' : '-- Select Excel/CSV --'}</option>
               <option value="__upload_new__">
-                {lang === 'ja' ? '📁 ＋ 新しいExcel/CSVを端末からアップロード...' : '📁 + Upload New Excel/CSV File...'}
+                {lang === 'ja' ? '+ 新しいExcel/CSVを端末からアップロード...' : '+ Upload New Excel/CSV File...'}
               </option>
               {fileList
                 .filter((f) => ['xlsx', 'xls', 'csv', 'tsv'].includes(f.format))
@@ -909,7 +909,7 @@ export const OfficeSuite: React.FC<OfficeSuiteProps> = ({
             >
               <option value="">{lang === 'ja' ? '-- アップロードされたデータファイルを選択または下記に直接入力 --' : '-- Select Loaded Data File or Type Below --'}</option>
               <option value="__upload_new__">
-                {lang === 'ja' ? '📁 ＋ 新しいデータファイルを端末からアップロード...' : '📁 + Upload New Data File...'}
+                {lang === 'ja' ? '+ 新しいデータファイルを端末からアップロード...' : '+ Upload New Data File...'}
               </option>
               {fileList
                 .filter((f) =>
@@ -1070,7 +1070,7 @@ export const OfficeSuite: React.FC<OfficeSuiteProps> = ({
             >
               <option value="">{lang === 'ja' ? '-- アップロードされたText/Markdownを選択 --' : '-- Select Uploaded Text/Markdown --'}</option>
               <option value="__upload_new__">
-                {lang === 'ja' ? '📁 ＋ 新しいText/Markdownを端末からアップロード...' : '📁 + Upload New Text/MD File...'}
+                {lang === 'ja' ? '+ 新しいText/Markdownを端末からアップロード...' : '+ Upload New Text/MD File...'}
               </option>
               {fileList
                 .filter((f) => ['txt', 'md', 'markdown', 'json', 'csv', 'html', 'js', 'css'].includes(f.format) || /\.(txt|md|markdown)$/i.test(f.name))

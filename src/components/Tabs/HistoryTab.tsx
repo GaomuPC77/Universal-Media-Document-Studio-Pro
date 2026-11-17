@@ -231,9 +231,10 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
               <History className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-base sm:text-lg text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                {lang === 'ja' ? 'ローカル処理履歴' : 'Local Conversion History'}
-                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+              <h3 className="font-bold text-base sm:text-lg text-slate-800 dark:text-slate-100 flex flex-wrap items-baseline gap-x-2">
+                <span>{lang === 'ja' ? 'ローカル処理履歴' : 'Local Conversion History'}</span>
+                <span className="text-xs font-normal text-slate-400" aria-hidden="true">·</span>
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400 tabular-nums">
                   {items.length} {lang === 'ja' ? '件' : 'items'} ({formatFileSize(totalBytes)})
                 </span>
               </h3>

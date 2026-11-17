@@ -374,7 +374,7 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
             >
               <option value="">{lang === 'ja' ? '-- アップロードされたPDFを選択 --' : '-- Select Uploaded PDF --'}</option>
               <option value="__upload_new__">
-                {lang === 'ja' ? '📁 ＋ 新しいPDFを端末からアップロード...' : '📁 + Upload New PDF File...'}
+                {lang === 'ja' ? '+ 新しいPDFを端末からアップロード...' : '+ Upload New PDF File...'}
               </option>
               {fileList
                 .filter((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'))
@@ -546,7 +546,7 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
             >
               <option value="">{lang === 'ja' ? '-- アップロードされた画像を選択 --' : '-- Select Uploaded Image --'}</option>
               <option value="__upload_new__">
-                {lang === 'ja' ? '📁 ＋ 新しい画像を端末からアップロード...' : '📁 + Upload New Image File...'}
+                {lang === 'ja' ? '+ 新しい画像を端末からアップロード...' : '+ Upload New Image File...'}
               </option>
               {fileList
                 .filter((f) => ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif'].includes(f.format) || /\.(png|jpe?g|webp|svg|bmp|gif)$/i.test(f.name))

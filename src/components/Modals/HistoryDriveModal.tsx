@@ -306,8 +306,8 @@ export const HistoryDriveModal: React.FC<HistoryDriveModalProps> = ({
                   </div>
                   <p className="text-[11px] text-slate-400 text-left">
                     {lang === 'ja'
-                      ? '✓ 各ファイルの「Drive保存」ボタンから直接Google Driveにアップロード保存できます。'
-                      : '✓ You can now click "Save to Drive" on any processed document to upload directly.'}
+                      ? '各ファイルの「Drive保存」ボタンから直接Google Driveにアップロード保存できます。'
+                      : 'You can now click "Save to Drive" on any processed document to upload directly.'}
                   </p>
                 </div>
               )}

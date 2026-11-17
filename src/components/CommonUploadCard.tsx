@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { HardDrive, Upload, FolderUp } from 'lucide-react';
+import { HardDrive } from 'lucide-react';
 import { getStoredToken, getDriveUser, fetchDriveUserInfo, requestGoogleAccessToken, disconnectGoogleDrive, initGoogleIdentityServices, DriveUser } from '../utils/googleDrive';
 
 interface CommonUploadCardProps {
@@ -66,14 +66,12 @@ export const CommonUploadCard: React.FC<CommonUploadCardProps> = ({
         </label>
         <div id="driveAccountStatus" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem' }}>
           {isConnected && driveUser ? (
-            <span id="driveStatusText" style={{ color: 'var(--text-sub)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-              <span style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: '#10b981' }}></span>
-              <span>Drive: <strong style={{ color: 'var(--text-color)' }}>{driveUser.displayName || driveUser.emailAddress}</strong></span>
+            <span id="driveStatusText" className="text-xs font-medium text-emerald-700 dark:text-emerald-400 inline-flex items-center gap-1">
+              <span>Drive: <strong className="text-slate-900 dark:text-slate-100">{driveUser.displayName || driveUser.emailAddress}</strong></span>
             </span>
           ) : (
-            <span id="driveStatusText" style={{ color: 'var(--text-sub)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-              <span style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: '#94a3b8' }}></span>
-              <span>{lang === 'ja' ? 'Google Drive: 未接続' : 'Google Drive: Disconnected'}</span>
+            <span id="driveStatusText" style={{ color: 'var(--text-sub)' }}>
+              {lang === 'ja' ? 'Google Drive: 未接続' : 'Google Drive: Disconnected'}
             </span>
           )}
 

@@ -626,7 +626,7 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
             >
               <option value="">{lang === 'ja' ? '-- アップロードされた画像/PDFを選択 --' : '-- Select Loaded Image/PDF --'}</option>
               <option value="__upload_new__">
-                {lang === 'ja' ? '📁 ＋ 新しい画像/PDFを端末からアップロード...' : '📁 + Upload New Image/PDF File...'}
+                {lang === 'ja' ? '+ 新しい画像/PDFを端末からアップロード...' : '+ Upload New Image/PDF File...'}
               </option>
               {fileList
                 .filter(
@@ -814,7 +814,7 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
               >
                 <option value="">{lang === 'ja' ? '-- アップロードされた画像/PDFを選択 --' : '-- Select Loaded Image/PDF --'}</option>
                 <option value="__upload_new__">
-                  {lang === 'ja' ? '📁 ＋ 新しい画像/PDFを端末からアップロード...' : '📁 + Upload New Image/PDF File...'}
+                  {lang === 'ja' ? '+ 新しい画像/PDFを端末からアップロード...' : '+ Upload New Image/PDF File...'}
                 </option>
                 {fileList
                   .filter(
@@ -848,7 +848,7 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
                     {isCameraActive && (
                       <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
                         <div className="w-48 h-48 border-2 border-emerald-400/90 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.35)] relative">
-                          <div className="absolute inset-x-2 top-1/2 h-0.5 bg-emerald-400 animate-pulse" />
+                          <div className="absolute inset-x-2 top-1/2 h-0.5 bg-emerald-400/80" />
                         </div>
                       </div>
                     )}

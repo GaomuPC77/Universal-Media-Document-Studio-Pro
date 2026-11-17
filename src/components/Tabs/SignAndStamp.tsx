@@ -4,20 +4,12 @@ import {
   Stamp,
   Shield,
   Download,
-  Upload,
-  RefreshCw,
-  Plus,
-  Trash2,
-  CheckCircle2,
-  Sliders,
-  FileText,
 } from 'lucide-react';
-import { HankoConfig, SignatureStampPlacement, RedactionBox, FileItem } from '../../types';
+import { HankoConfig, FileItem, PdfPageInfo } from '../../types';
 import { generateHankoImage } from '../../utils/hankoUtils';
-import { getPdfPages, stampPdf } from '../../utils/pdfUtils';
-import { saveProcessedFile } from '../../utils/historyDb';
-import { notifyCompletion } from '../../utils/notification';
+import { getPdfPages } from '../../utils/pdfUtils';
 import { AddToQueuePromptModal } from '../Modals/AddToQueuePromptModal';
+import { PdfMarkupEditor } from '../PdfMarkupEditor';
 
 interface SignAndStampProps {
   lang: 'ja' | 'en';
@@ -63,14 +55,11 @@ export const SignAndStamp: React.FC<SignAndStampProps> = ({
   const [sigWidth, setSigWidth] = useState(3);
   const [signatureDataUrl, setSignatureDataUrl] = useState<string>('');
 
-  // PDF Signer State
+  // PDF Signer & Markup State
   const [pdfFile, setPdfFile] = useState<File | null>(null);
-  const [pdfPages, setPdfPages] = useState<{ pageNumber: number; thumbnailUrl: string; width: number; height: number }[]>([]);
-  const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
-  const [stamps, setStamps] = useState<SignatureStampPlacement[]>([]);
-  const [redactions, setRedactions] = useState<RedactionBox[]>([]);
-  const [activeTool, setActiveTool] = useState<'stamp' | 'redact'>('stamp');
-  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [pdfPages, setPdfPages] = useState<PdfPageInfo[]>([]);
+  const [isLoadingPdf, setIsLoadingPdf] = useState(false);
+  const [stampSource, setStampSource] = useState<'hanko' | 'signature'>('hanko');
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
   // Auto load shared PDF when dropped or from fileList
@@ -92,17 +81,17 @@ export const SignAndStamp: React.FC<SignAndStampProps> = ({
     setHankoDataUrl(url);
   }, [hankoConfig]);
 
-  // Handle PDF load for signing
+  // Handle PDF load for signing & markup
   const handleLoadPdf = async (file: File) => {
     setPdfFile(file);
-    setStamps([]);
-    setRedactions([]);
+    setIsLoadingPdf(true);
     try {
       const pages = await getPdfPages(file);
       setPdfPages(pages);
-      setCurrentPageIndex(0);
     } catch (e) {
       console.error('Failed to load PDF:', e);
+    } finally {
+      setIsLoadingPdf(false);
     }
   };
 
@@ -157,100 +146,6 @@ export const SignAndStamp: React.FC<SignAndStampProps> = ({
     setSignatureDataUrl('');
   };
 
-  // Click on PDF Page to place stamp or redaction
-  const handlePdfPageClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!pdfPages[currentPageIndex]) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
-
-    // Scale to original page dimensions
-    const scaleX = pdfPages[currentPageIndex].width / rect.width;
-    const scaleY = pdfPages[currentPageIndex].height / rect.height;
-
-    const pdfX = clickX * scaleX;
-    const pdfY = clickY * scaleY;
-
-    if (activeTool === 'stamp') {
-      const stampImg = hankoDataUrl || signatureDataUrl;
-      if (!stampImg) {
-        alert(lang === 'ja' ? '電子印鑑または手書き署名を先に作成してください。' : 'Create a Hanko or Signature first.');
-        return;
-      }
-
-      setStamps((prev) => [
-        ...prev,
-        {
-          id: Math.random().toString(36).substring(2, 9),
-          pageIndex: currentPageIndex,
-          x: pdfX - 40,
-          y: pdfY - 40,
-          width: 80,
-          height: 80,
-          imageUrl: stampImg,
-          rotation: 0,
-        },
-      ]);
-    } else if (activeTool === 'redact') {
-      setRedactions((prev) => [
-        ...prev,
-        {
-          id: Math.random().toString(36).substring(2, 9),
-          pageIndex: currentPageIndex,
-          x: pdfX - 60,
-          y: pdfY - 15,
-          width: 120,
-          height: 30,
-          color: '#000000',
-        },
-      ]);
-    }
-  };
-
-  // Export Signed and Redacted PDF
-  const handleExportSignedPdf = async () => {
-    if (!pdfFile) return;
-    setIsExportingPdf(true);
-    const resultName = `Signed_${pdfFile.name}`;
-    try {
-      const fileBuffer = await pdfFile.arrayBuffer();
-      const signedBytes = await stampPdf(fileBuffer, stamps, redactions);
-
-      const blob = new Blob([signedBytes], { type: 'application/pdf' });
-      await saveProcessedFile(`pdf_signed_${Date.now()}`, pdfFile.name, resultName, blob, 'pdf');
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = resultName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      if (onResultReady) {
-        onResultReady({
-          id: `res_signed_${Date.now()}`,
-          name: resultName,
-          file: new File([blob], resultName, { type: 'application/pdf' }),
-          size: blob.size,
-          type: 'application/pdf',
-          format: 'pdf',
-          targetFormat: 'pdf',
-          status: 'done',
-          progress: 100,
-          resultBlob: blob,
-          resultName,
-        });
-      }
-      notifyCompletion(lang === 'ja' ? 'PDFへの電子捺印・署名が完了しました' : 'PDF Signed & Stamped', resultName);
-      if (onShowToast) onShowToast(lang === 'ja' ? `「${resultName}」を作成しました` : `Saved "${resultName}"`);
-    } catch (e) {
-      console.error('Failed to export signed PDF:', e);
-    } finally {
-      setIsExportingPdf(false);
-    }
-  };
-
   return (
     <div className="flex flex-col gap-6 max-w-5xl mx-auto">
       {/* Add To Queue Confirmation Modal */}
@@ -280,11 +175,11 @@ export const SignAndStamp: React.FC<SignAndStampProps> = ({
       />
 
       {/* Sub Tabs */}
-      <div className="grid grid-cols-3 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 max-w-lg mx-auto w-full">
+      <div className="grid grid-cols-3 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 max-w-2xl mx-auto w-full">
         {[
           { id: 'hanko', labelJa: '電子印鑑作成', labelEn: 'Digital Seal (Hanko)', icon: Stamp },
           { id: 'signature', labelJa: '手書き署名', labelEn: 'Signature Pad', icon: PenTool },
-          { id: 'pdf-signer', labelJa: 'PDFへ捺印・黒塗り', labelEn: 'PDF Sign & Redact', icon: Shield },
+          { id: 'pdf-signer', labelJa: 'PDF注釈・テキスト・捺印', labelEn: 'PDF Markup, Text & Sign', icon: Shield },
         ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -292,13 +187,13 @@ export const SignAndStamp: React.FC<SignAndStampProps> = ({
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as any)}
-              className={`flex items-center justify-center gap-2 py-2 px-2 rounded-lg text-xs font-bold transition ${
+              className={`flex items-center justify-center gap-2 py-2 px-2 rounded-lg text-xs font-bold transition whitespace-nowrap ${
                 isActive
                   ? 'bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 shadow-xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
               }`}
             >
-              <Icon className="w-3.5 h-3.5" />
+              <Icon className="w-3.5 h-3.5 shrink-0" />
               <span>{lang === 'ja' ? tab.labelJa : tab.labelEn}</span>
             </button>
           );
@@ -357,7 +252,7 @@ export const SignAndStamp: React.FC<SignAndStampProps> = ({
                 value={hankoConfig.text}
                 onChange={(e) => setHankoConfig((prev) => ({ ...prev, text: e.target.value }))}
                 className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-bold"
-                placeholder={lang === 'ja' ? '山田 / 株式会社AI' : 'Smith / AI Corp'}
+                placeholder={lang === 'ja' ? '山田 / 株式会社サンプル' : 'Smith / Sample Corp'}
               />
             </div>
 
@@ -548,18 +443,18 @@ export const SignAndStamp: React.FC<SignAndStampProps> = ({
         </div>
       )}
 
-      {/* 3. PDF Signer & Redaction Tool */}
+      {/* 3. PDF Markup, Text Box, Signer & Redaction Tool */}
       {activeTab === 'pdf-signer' && (
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm flex flex-col gap-5">
           <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
             <div>
               <h3 className="font-bold text-sm sm:text-base text-slate-800 dark:text-slate-100">
-                {lang === 'ja' ? 'PDFへの直接捺印・署名配置 & 機密情報黒塗り' : 'PDF Interactive Signer & Redaction Tool'}
+                {lang === 'ja' ? 'PDFマークアップ・テキスト追加・電子捺印・黒塗り' : 'PDF Markup, Text Box, Signer & Redaction'}
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
                 {lang === 'ja'
-                  ? 'クリックした位置に印鑑・署名を配置。また、隠したい機密部分を黒塗りマスキングできます。'
-                  : 'Click anywhere on PDF pages to stamp signature or draw blackout redaction.'}
+                  ? 'テキストボックスの挿入、蛍光マーカー・図形・フリーハンド注釈、作成した印鑑・手書き署名の配置、機密情報の黒塗りを1画面で行えます。'
+                  : 'Insert text boxes, highlights, shapes, freehand annotations, digital stamps/signatures, and blackout redactions on PDF pages.'}
               </p>
             </div>
             <input
@@ -576,182 +471,104 @@ export const SignAndStamp: React.FC<SignAndStampProps> = ({
             />
           </div>
 
-          {/* Unified Target PDF Selector */}
-          <div>
-            <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-              {lang === 'ja' ? '変換対象のPDFファイルを選択:' : 'Select Target PDF File:'}
-            </label>
-            <select
-              value={selectedPdfId}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (val === '__upload_new__') {
-                  pdfInputRef.current?.click();
-                  return;
-                }
-                setSelectedPdfId(val);
-                const found = fileList.find((f) => f.id === val);
-                if (found && found.file) {
-                  handleLoadPdf(found.file);
-                }
-              }}
-              className="main-select"
-            >
-              <option value="">{lang === 'ja' ? '-- アップロードされたPDFを選択 --' : '-- Select Uploaded PDF --'}</option>
-              <option value="__upload_new__">
-                {lang === 'ja' ? '📁 ＋ 新しいPDFを端末からアップロード...' : '📁 + Upload New PDF File...'}
-              </option>
-              {fileList
-                .filter((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'))
-                .map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name} ({(f.size / 1024).toFixed(1)} KB)
-                  </option>
-                ))}
-            </select>
+          {/* Unified Target PDF Selector & Stamp Source Switcher */}
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            <div className="md:col-span-7">
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                {lang === 'ja' ? '対象のPDFファイルを選択:' : 'Select Target PDF File:'}
+              </label>
+              <select
+                value={selectedPdfId}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '__upload_new__') {
+                    pdfInputRef.current?.click();
+                    return;
+                  }
+                  setSelectedPdfId(val);
+                  const found = fileList.find((f) => f.id === val);
+                  if (found && found.file) {
+                    handleLoadPdf(found.file);
+                  }
+                }}
+                className="main-select mb-0"
+              >
+                <option value="">{lang === 'ja' ? '-- アップロードされたPDFを選択 --' : '-- Select Uploaded PDF --'}</option>
+                <option value="__upload_new__">
+                  {lang === 'ja' ? '＋ 新しいPDFを端末からアップロード...' : '+ Upload New PDF File...'}
+                </option>
+                {fileList
+                  .filter((f) => f.format === 'pdf' || f.name.toLowerCase().endsWith('.pdf'))
+                  .map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name} ({(f.size / 1024).toFixed(1)} KB)
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            <div className="md:col-span-5">
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                {lang === 'ja' ? '「印鑑・署名」ツールで使用する画像:' : 'Active Stamp / Signature Source:'}
+              </label>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  onClick={() => setStampSource('hanko')}
+                  className={`px-3 py-2 rounded-lg text-xs font-semibold border transition cursor-pointer ${
+                    stampSource === 'hanko'
+                      ? 'bg-red-600 border-red-600 text-white'
+                      : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  {lang === 'ja' ? '電子印鑑を使う' : 'Use Hanko Seal'}
+                </button>
+                <button
+                  onClick={() => setStampSource('signature')}
+                  disabled={!signatureDataUrl}
+                  className={`px-3 py-2 rounded-lg text-xs font-semibold border transition cursor-pointer disabled:opacity-40 ${
+                    stampSource === 'signature'
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                  }`}
+                  title={!signatureDataUrl ? (lang === 'ja' ? '先に「手書き署名」タブで署名を作成してください' : 'Draw a signature first') : ''}
+                >
+                  {lang === 'ja' ? '手書き署名を使う' : 'Use Signature'}
+                </button>
+              </div>
+            </div>
           </div>
 
           {!pdfFile ? (
             <div
               onClick={() => pdfInputRef.current?.click()}
-              className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 rounded-xl p-8 flex flex-col items-center justify-center text-center cursor-pointer bg-slate-50/50 transition"
+              className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 rounded-xl p-8 flex flex-col items-center justify-center text-center cursor-pointer bg-slate-50/50 dark:bg-slate-900/40 transition"
             >
               <Shield className="w-10 h-10 text-slate-400 mb-2" />
               <p className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-300">
-                {lang === 'ja' ? '捺印または黒塗りしたいPDFを選択' : 'Select PDF to sign or redact'}
+                {lang === 'ja' ? '注釈・テキスト追加・捺印・黒塗りしたいPDFを選択' : 'Select PDF to annotate, add text, sign or redact'}
               </p>
             </div>
-          ) : (
-            <div className="flex flex-col gap-4">
-              {/* PDF Placer Toolbar */}
-              <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-slate-100 dark:bg-slate-800 rounded-xl">
-                {/* Tool toggle */}
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setActiveTool('stamp')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                      activeTool === 'stamp' ? 'bg-red-600 text-white shadow-xs' : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
-                    }`}
-                  >
-                    {lang === 'ja' ? '印鑑・署名スタンプ配置' : 'Stamp Placement'}
-                  </button>
-                  <button
-                    onClick={() => setActiveTool('redact')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                      activeTool === 'redact' ? 'bg-black text-white shadow-xs' : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300'
-                    }`}
-                  >
-                    {lang === 'ja' ? '機密情報 黒塗りマスキング' : 'Blackout Redaction'}
-                  </button>
-                </div>
-
-                {/* Page switcher */}
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="font-semibold text-slate-600 dark:text-slate-300">
-                    {lang === 'ja' ? 'ページ:' : 'Page:'} {currentPageIndex + 1} / {pdfPages.length}
-                  </span>
-                  <div className="flex gap-1">
-                    <button
-                      disabled={currentPageIndex === 0}
-                      onClick={() => setCurrentPageIndex((prev) => Math.max(0, prev - 1))}
-                      className="px-2 py-1 rounded bg-white dark:bg-slate-900 disabled:opacity-40 font-bold border border-slate-200 dark:border-slate-700"
-                    >
-                      ‹
-                    </button>
-                    <button
-                      disabled={currentPageIndex === pdfPages.length - 1}
-                      onClick={() => setCurrentPageIndex((prev) => Math.min(pdfPages.length - 1, prev + 1))}
-                      className="px-2 py-1 rounded bg-white dark:bg-slate-900 disabled:opacity-40 font-bold border border-slate-200 dark:border-slate-700"
-                    >
-                      ›
-                    </button>
-                  </div>
-                </div>
-
-                {/* Export Button */}
-                <button
-                  onClick={handleExportSignedPdf}
-                  disabled={isExportingPdf}
-                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs"
-                >
-                  {isExportingPdf ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                  <span>{lang === 'ja' ? '署名済みPDFを出力' : 'Export Signed PDF'}</span>
-                </button>
-              </div>
-
-              {/* Interactive PDF Page Area */}
-              <div className="flex justify-center p-4 bg-slate-200 dark:bg-slate-950 rounded-2xl overflow-auto min-h-[450px]">
-                {pdfPages[currentPageIndex] && (
-                  <div
-                    onClick={handlePdfPageClick}
-                    className="relative bg-white shadow-2xl rounded cursor-crosshair select-none max-w-full"
-                    style={{
-                      width: `${pdfPages[currentPageIndex].width * 0.75}px`,
-                      height: `${pdfPages[currentPageIndex].height * 0.75}px`,
-                    }}
-                  >
-                    <img
-                      src={pdfPages[currentPageIndex].thumbnailUrl}
-                      alt="PDF Page"
-                      className="w-full h-full object-contain pointer-events-none"
-                    />
-
-                    {/* Render placed stamps for current page */}
-                    {stamps
-                      .filter((s) => s.pageIndex === currentPageIndex)
-                      .map((s) => (
-                        <div
-                          key={s.id}
-                          style={{
-                            left: `${(s.x / pdfPages[currentPageIndex].width) * 100}%`,
-                            top: `${(s.y / pdfPages[currentPageIndex].height) * 100}%`,
-                            width: `${(s.width / pdfPages[currentPageIndex].width) * 100}%`,
-                            height: `${(s.height / pdfPages[currentPageIndex].height) * 100}%`,
-                          }}
-                          className="absolute border border-blue-400/50 group"
-                        >
-                          <img src={s.imageUrl} alt="stamp" className="w-full h-full object-contain" />
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setStamps((prev) => prev.filter((item) => item.id !== s.id));
-                            }}
-                            className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition shadow-xs"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))}
-
-                    {/* Render placed redaction boxes for current page */}
-                    {redactions
-                      .filter((r) => r.pageIndex === currentPageIndex)
-                      .map((r) => (
-                        <div
-                          key={r.id}
-                          style={{
-                            left: `${(r.x / pdfPages[currentPageIndex].width) * 100}%`,
-                            top: `${(r.y / pdfPages[currentPageIndex].height) * 100}%`,
-                            width: `${(r.width / pdfPages[currentPageIndex].width) * 100}%`,
-                            height: `${(r.height / pdfPages[currentPageIndex].height) * 100}%`,
-                          }}
-                          className="absolute bg-black group"
-                        >
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setRedactions((prev) => prev.filter((item) => item.id !== r.id));
-                            }}
-                            className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition shadow-xs"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
+          ) : isLoadingPdf ? (
+            <div className="py-16 flex flex-col items-center justify-center gap-3 text-slate-500">
+              <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              <p className="text-xs font-medium">{lang === 'ja' ? 'PDFページを展開中...' : 'Loading PDF pages...'}</p>
             </div>
+          ) : (
+            <PdfMarkupEditor
+              lang={lang}
+              pdfFile={pdfFile}
+              pdfPages={pdfPages}
+              stampImageUrl={
+                stampSource === 'signature' && signatureDataUrl
+                  ? signatureDataUrl
+                  : hankoDataUrl || signatureDataUrl
+              }
+              enableStampTool={true}
+              initialTool="stamp"
+              exportFilePrefix="Signed_"
+              onResultReady={onResultReady}
+              onShowToast={onShowToast}
+            />
           )}
         </div>
       )}

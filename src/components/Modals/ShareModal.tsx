@@ -100,7 +100,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             </div>
           ) : (
             <div className="w-40 h-40 flex items-center justify-center bg-slate-200 dark:bg-slate-700 rounded-xl">
-              <QrCode className="w-10 h-10 text-slate-400 animate-pulse" />
+              <QrCode className="w-10 h-10 text-slate-400" />
             </div>
           )}
           <div className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 font-medium">

@@ -1,7 +1,13 @@
-import { PDFDocument, rgb, degrees, StandardFonts, PDFPage } from 'pdf-lib';
+import { PDFDocument, rgb, degrees, StandardFonts, PDFPage, LineCapStyle } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
-import { PdfPageInfo, SignatureStampPlacement, RedactionBox } from '../types';
+import {
+  PdfPageInfo,
+  SignatureStampPlacement,
+  RedactionBox,
+  PdfTextBoxAnnotation,
+  PdfMarkupAnnotation,
+} from '../types';
 
 // Set up pdf.js worker and cMap support
 try {
@@ -501,23 +507,320 @@ export async function enhancePdf(
   return await doc.save();
 }
 
+function hexToPdfRgb(hex: string) {
+  const clean = (hex || '#000000').replace('#', '').trim();
+  const full =
+    clean.length === 3
+      ? clean
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : clean.padEnd(6, '0').slice(0, 6);
+  const r = parseInt(full.slice(0, 2), 16) / 255;
+  const g = parseInt(full.slice(2, 4), 16) / 255;
+  const b = parseInt(full.slice(4, 6), 16) / 255;
+  return rgb(isNaN(r) ? 0 : r, isNaN(g) ? 0 : g, isNaN(b) ? 0 : b);
+}
+
+function hexToRgbaCss(hex: string, opacity: number): string {
+  const clean = (hex || '#ffffff').replace('#', '').trim();
+  const full =
+    clean.length === 3
+      ? clean
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : clean.padEnd(6, '0').slice(0, 6);
+  const r = parseInt(full.slice(0, 2), 16) || 0;
+  const g = parseInt(full.slice(2, 4), 16) || 0;
+  const b = parseInt(full.slice(4, 6), 16) || 0;
+  return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, opacity))})`;
+}
+
+async function renderTextBoxToPngBytes(box: PdfTextBoxAnnotation): Promise<Uint8Array> {
+  const scale = 4; // 4x oversampling for razor-sharp Japanese/Unicode text
+  const w = Math.max(20, Math.round(box.width * scale));
+  const h = Math.max(16, Math.round(box.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return new Uint8Array();
+
+  // Background fill
+  if (box.bgColor && box.bgColor !== 'transparent' && box.bgOpacity > 0) {
+    ctx.fillStyle = hexToRgbaCss(box.bgColor, box.bgOpacity);
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  // Border
+  if (box.borderWidth > 0 && box.borderColor && box.borderColor !== 'transparent') {
+    const bw = box.borderWidth * scale;
+    ctx.strokeStyle = box.borderColor;
+    ctx.lineWidth = bw;
+    ctx.strokeRect(bw / 2, bw / 2, w - bw, h - bw);
+  }
+
+  // Typography
+  const fontStack =
+    box.fontFamily === 'serif'
+      ? '"Noto Serif JP", "Yu Mincho", "Hiragino Mincho ProN", serif'
+      : box.fontFamily === 'mono'
+      ? 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+      : '"Noto Sans JP", "Hiragino Sans", "Yu Gothic", -apple-system, BlinkMacSystemFont, sans-serif';
+  const fontSizePx = box.fontSize * scale;
+  const weight = box.bold ? '700' : '500';
+  ctx.font = `${weight} ${fontSizePx}px ${fontStack}`;
+  ctx.fillStyle = box.textColor || '#0f172a';
+  ctx.textBaseline = 'top';
+
+  const padX = Math.max(6, 6 * scale);
+  const padY = Math.max(5, 5 * scale);
+  const maxTextWidth = Math.max(10, w - padX * 2);
+  const lineHeight = fontSizePx * 1.35;
+
+  // Wrap lines cleanly character-by-character for CJK + English compatibility
+  const rawParagraphs = (box.text || '').split(/\r?\n/);
+  const lines: string[] = [];
+  for (const para of rawParagraphs) {
+    if (!para) {
+      lines.push('');
+      continue;
+    }
+    let currentLine = '';
+    for (const ch of Array.from(para)) {
+      const testLine = currentLine + ch;
+      if (ctx.measureText(testLine).width > maxTextWidth && currentLine.length > 0) {
+        lines.push(currentLine);
+        currentLine = ch;
+      } else {
+        currentLine = testLine;
+      }
+    }
+    if (currentLine) lines.push(currentLine);
+  }
+
+  let cursorY = padY;
+  for (const line of lines) {
+    if (cursorY + fontSizePx * 0.4 > h) break;
+    let drawX = padX;
+    if (box.align === 'center') {
+      ctx.textAlign = 'center';
+      drawX = w / 2;
+    } else if (box.align === 'right') {
+      ctx.textAlign = 'right';
+      drawX = w - padX;
+    } else {
+      ctx.textAlign = 'left';
+      drawX = padX;
+    }
+    ctx.fillText(line, drawX, cursorY);
+    cursorY += lineHeight;
+  }
+
+  const blob: Blob = await new Promise((resolve) => canvas.toBlob((b) => resolve(b || new Blob()), 'image/png'));
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+async function renderBadgeToPngBytes(markup: PdfMarkupAnnotation): Promise<Uint8Array> {
+  const scale = 4;
+  const w = Math.max(24, Math.round(markup.width * scale));
+  const h = Math.max(18, Math.round(markup.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return new Uint8Array();
+
+  const radius = Math.min(8 * scale, h / 2.2);
+  const bw = Math.max(1.5, markup.strokeWidth) * scale;
+
+  ctx.globalAlpha = markup.opacity ?? 0.95;
+  ctx.beginPath();
+  ctx.roundRect(bw / 2, bw / 2, w - bw, h - bw, radius);
+  if (markup.fillColor && markup.fillColor !== 'transparent') {
+    ctx.fillStyle = markup.fillColor;
+    ctx.fill();
+  }
+  ctx.strokeStyle = markup.strokeColor || '#dc2626';
+  ctx.lineWidth = bw;
+  ctx.stroke();
+
+  const label = markup.label || '✓';
+  const fontSize = Math.max(10, Math.min(markup.height * 0.54, 20)) * scale;
+  ctx.font = `700 ${fontSize}px "Noto Sans JP", sans-serif`;
+  ctx.fillStyle = markup.strokeColor || '#dc2626';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, w / 2, h / 2 + scale * 0.5);
+
+  const blob: Blob = await new Promise((resolve) => canvas.toBlob((b) => resolve(b || new Blob()), 'image/png'));
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
 /**
- * Add Signature Stamp Image or Draw Placement and Redactions to PDF
+ * Add Signature Stamp Images, Redactions, Markups, and Text Boxes to PDF
+ * Note: All input annotation coordinates use top-left page origin (matching browser preview).
  */
 export async function stampPdf(
   pdfBuffer: ArrayBuffer,
   stamps: SignatureStampPlacement[],
-  redactions?: RedactionBox[]
+  redactions?: RedactionBox[],
+  textBoxes?: PdfTextBoxAnnotation[],
+  markups?: PdfMarkupAnnotation[]
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
   const pages = doc.getPages();
 
-  // Draw stamps
+  // 1. Draw markups (behind stamps/textboxes/redactions or in logical order)
+  if (markups && markups.length > 0) {
+    for (const m of markups) {
+      const pageIndex = m.pageIndex !== undefined ? m.pageIndex : 0;
+      if (pageIndex < 0 || pageIndex >= pages.length) continue;
+      const page = pages[pageIndex];
+      const { height: pageHeight } = page.getSize();
+
+      if (m.kind === 'highlight') {
+        page.drawRectangle({
+          x: m.x,
+          y: pageHeight - m.y - m.height,
+          width: m.width,
+          height: m.height,
+          color: hexToPdfRgb(m.fillColor || m.strokeColor || '#fde047'),
+          opacity: m.opacity ?? 0.38,
+        });
+      } else if (m.kind === 'rect') {
+        const hasFill = Boolean(m.fillColor && m.fillColor !== 'transparent');
+        page.drawRectangle({
+          x: m.x,
+          y: pageHeight - m.y - m.height,
+          width: m.width,
+          height: m.height,
+          borderColor: hexToPdfRgb(m.strokeColor || '#dc2626'),
+          borderWidth: m.strokeWidth || 2,
+          borderOpacity: m.opacity ?? 1,
+          ...(hasFill ? { color: hexToPdfRgb(m.fillColor!), opacity: Math.min(m.opacity ?? 1, 0.2) } : {}),
+        });
+      } else if (m.kind === 'ellipse') {
+        const hasFill = Boolean(m.fillColor && m.fillColor !== 'transparent');
+        page.drawEllipse({
+          x: m.x + m.width / 2,
+          y: pageHeight - (m.y + m.height / 2),
+          xScale: Math.max(1, m.width / 2),
+          yScale: Math.max(1, m.height / 2),
+          borderColor: hexToPdfRgb(m.strokeColor || '#dc2626'),
+          borderWidth: m.strokeWidth || 2,
+          borderOpacity: m.opacity ?? 1,
+          ...(hasFill ? { color: hexToPdfRgb(m.fillColor!), opacity: Math.min(m.opacity ?? 1, 0.2) } : {}),
+        });
+      } else if (m.kind === 'line' || m.kind === 'arrow') {
+        const startX = m.x1 ?? m.x;
+        const startY = pageHeight - (m.y1 ?? m.y);
+        const endX = m.x2 ?? m.x + m.width;
+        const endY = pageHeight - (m.y2 ?? m.y + m.height);
+        const color = hexToPdfRgb(m.strokeColor || '#dc2626');
+        const thickness = m.strokeWidth || 2.5;
+        const opacity = m.opacity ?? 1;
+
+        page.drawLine({
+          start: { x: startX, y: startY },
+          end: { x: endX, y: endY },
+          thickness,
+          color,
+          opacity,
+          lineCap: LineCapStyle.Round,
+        });
+
+        if (m.kind === 'arrow') {
+          const dx = endX - startX;
+          const dy = endY - startY;
+          if (Math.hypot(dx, dy) > 4) {
+            const angle = Math.atan2(dy, dx);
+            const headLen = Math.max(10, thickness * 4);
+            const wing1Angle = angle + Math.PI * 0.82;
+            const wing2Angle = angle - Math.PI * 0.82;
+            page.drawLine({
+              start: { x: endX, y: endY },
+              end: {
+                x: endX + headLen * Math.cos(wing1Angle),
+                y: endY + headLen * Math.sin(wing1Angle),
+              },
+              thickness,
+              color,
+              opacity,
+              lineCap: LineCapStyle.Round,
+            });
+            page.drawLine({
+              start: { x: endX, y: endY },
+              end: {
+                x: endX + headLen * Math.cos(wing2Angle),
+                y: endY + headLen * Math.sin(wing2Angle),
+              },
+              thickness,
+              color,
+              opacity,
+              lineCap: LineCapStyle.Round,
+            });
+          }
+        }
+      } else if (m.kind === 'pen' && m.points && m.points.length >= 2) {
+        const color = hexToPdfRgb(m.strokeColor || '#dc2626');
+        const thickness = m.strokeWidth || 2.5;
+        const opacity = m.opacity ?? 1;
+        for (let i = 1; i < m.points.length; i++) {
+          const p0 = m.points[i - 1];
+          const p1 = m.points[i];
+          page.drawLine({
+            start: { x: p0.x, y: pageHeight - p0.y },
+            end: { x: p1.x, y: pageHeight - p1.y },
+            thickness,
+            color,
+            opacity,
+            lineCap: LineCapStyle.Round,
+          });
+        }
+      } else if (m.kind === 'badge') {
+        const pngBytes = await renderBadgeToPngBytes(m);
+        if (pngBytes.length > 0) {
+          const img = await doc.embedPng(pngBytes);
+          page.drawImage(img, {
+            x: m.x,
+            y: pageHeight - m.y - m.height,
+            width: m.width,
+            height: m.height,
+          });
+        }
+      }
+    }
+  }
+
+  // 2. Draw Text Boxes (high-DPI PNG so Japanese/Unicode fonts render 100% faithfully)
+  if (textBoxes && textBoxes.length > 0) {
+    for (const box of textBoxes) {
+      const pageIndex = box.pageIndex !== undefined ? box.pageIndex : 0;
+      if (pageIndex < 0 || pageIndex >= pages.length) continue;
+      const page = pages[pageIndex];
+      const { height: pageHeight } = page.getSize();
+      const pngBytes = await renderTextBoxToPngBytes(box);
+      if (pngBytes.length > 0) {
+        const img = await doc.embedPng(pngBytes);
+        page.drawImage(img, {
+          x: box.x,
+          y: pageHeight - box.y - box.height,
+          width: box.width,
+          height: box.height,
+        });
+      }
+    }
+  }
+
+  // 3. Draw stamps
   if (stamps && stamps.length > 0) {
     for (const stamp of stamps) {
       const pageIndex = stamp.pageIndex !== undefined ? stamp.pageIndex : 0;
       if (pageIndex < 0 || pageIndex >= pages.length) continue;
       const page = pages[pageIndex];
+      const { height: pageHeight } = page.getSize();
 
       if (stamp.imageUrl) {
         let image;
@@ -529,7 +832,7 @@ export async function stampPdf(
 
         page.drawImage(image, {
           x: stamp.x,
-          y: stamp.y,
+          y: pageHeight - stamp.y - stamp.height,
           width: stamp.width,
           height: stamp.height,
         });
@@ -537,19 +840,20 @@ export async function stampPdf(
     }
   }
 
-  // Draw blackouts / redactions
+  // 4. Draw blackouts / redactions
   if (redactions && redactions.length > 0) {
     for (const box of redactions) {
       const pageIndex = box.pageIndex !== undefined ? box.pageIndex : 0;
       if (pageIndex < 0 || pageIndex >= pages.length) continue;
       const page = pages[pageIndex];
+      const { height: pageHeight } = page.getSize();
 
       page.drawRectangle({
         x: box.x,
-        y: box.y,
+        y: pageHeight - box.y - box.height,
         width: box.width,
         height: box.height,
-        color: rgb(0, 0, 0),
+        color: hexToPdfRgb(box.color || '#000000'),
       });
     }
   }

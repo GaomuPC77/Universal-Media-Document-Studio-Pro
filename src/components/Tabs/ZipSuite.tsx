@@ -300,7 +300,7 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({
             >
               <option value="">{lang === 'ja' ? '-- アップロードされたZIPを選択 --' : '-- Select Loaded ZIP --'}</option>
               <option value="__upload_new__">
-                {lang === 'ja' ? '📁 ＋ 新しいZIPを端末からアップロード...' : '📁 + Upload New ZIP File...'}
+                {lang === 'ja' ? '+ 新しいZIPを端末からアップロード...' : '+ Upload New ZIP File...'}
               </option>
               {fileList
                   .filter((f) => f.format === 'zip' || f.name.toLowerCase().endsWith('.zip'))
@@ -436,11 +436,11 @@ export const ZipSuite: React.FC<ZipSuiteProps> = ({
             >
               <option value="">{lang === 'ja' ? '-- アップロードされたファイルを選択してZIPに追加 --' : '-- Select Uploaded File to Add to ZIP --'}</option>
               <option value="__upload_new__">
-                {lang === 'ja' ? '📁 ＋ 新しいファイルを端末からアップロード...' : '📁 + Upload New Files from Device...'}
+                {lang === 'ja' ? '+ 新しいファイルを端末からアップロード...' : '+ Upload New Files from Device...'}
               </option>
               {fileList.length > 0 && (
                 <option value="__all__">
-                  {lang === 'ja' ? '⚡ キュー内のすべてのファイルを追加' : '⚡ Add All Files in Queue'}
+                  {lang === 'ja' ? 'キュー内のすべてのファイルを追加' : 'Add All Files in Queue'}
                 </option>
               )}
               {fileList.map((f) => (

@@ -218,7 +218,7 @@ export const DiffSuite: React.FC<DiffSuiteProps> = ({
           >
             <option value="">{lang === 'ja' ? '-- アップロードされた文書を選択 --' : '-- Select Uploaded Document --'}</option>
             <option value="__upload_new__">
-              {lang === 'ja' ? '📁 ＋ 新しい文書を端末からアップロード...' : '📁 + Upload New Document File...'}
+              {lang === 'ja' ? '+ 新しい文書を端末からアップロード...' : '+ Upload New Document File...'}
             </option>
             {fileList
               .filter((f) =>
@@ -256,7 +256,7 @@ export const DiffSuite: React.FC<DiffSuiteProps> = ({
           >
             <option value="">{lang === 'ja' ? '-- アップロードされた文書を選択 --' : '-- Select Uploaded Document --'}</option>
             <option value="__upload_new__">
-              {lang === 'ja' ? '📁 ＋ 新しい文書を端末からアップロード...' : '📁 + Upload New Document File...'}
+              {lang === 'ja' ? '+ 新しい文書を端末からアップロード...' : '+ Upload New Document File...'}
             </option>
             {fileList
               .filter((f) =>
