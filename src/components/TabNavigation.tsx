@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   ChevronRight,
   FileSearch,
+  Shapes,
   LucideIcon,
 } from 'lucide-react';
 import { TAB_DEFINITIONS, TabAdaptiveMode, TabMeta } from '../utils/tabOrdering';
@@ -31,6 +32,7 @@ const TAB_ICON_MAP: Record<string, LucideIcon> = {
   'pdf-suite': FileText,
   'pdf-image': ImageIcon,
   'image-editor': Sliders,
+  'svg-studio': Shapes,
   'office-suite': Briefcase,
   'html-studio': FileCode,
   'sign-stamp': PenTool,

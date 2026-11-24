@@ -12,6 +12,7 @@ import { ZipSuite } from './components/Tabs/ZipSuite';
 import { HistoryTab } from './components/Tabs/HistoryTab';
 import { HtmlStudio } from './components/Tabs/HtmlStudio';
 import { ImageEditorSuite } from './components/Tabs/ImageEditorSuite';
+import { SvgEditorSuite } from './components/Tabs/SvgEditorSuite';
 import { MetadataSuite } from './components/Tabs/MetadataSuite';
 import { StatusQueueCard } from './components/StatusQueueCard';
 import { FilePreviewModal } from './components/Modals/FilePreviewModal';
@@ -200,15 +201,15 @@ export default function App() {
       targetId: 'tabNavContainer',
       titleJa: '2. 処理ツールの選択 ＆ タブ連動モード設定',
       titleEn: '2. Select Tool & Tab Behavior',
-      descJa: '「PDF編集・整理（マークアップ・テキストボックス含む）」「PDF ⇔ 画像」「画像編集・変換」「Office・データ表」「HTML・Markdown」「電子印鑑・署名・PDF注釈」「OCR・QR」「差分比較」「メタデータ・C2PA」「ZIP・一括リネーム」「履歴」から選択します。右上のメニューで「自動スクロール（順番固定）」「順番自動並び替え」「オフ」の3モードを切り替えられます。',
-      descEn: 'Choose from PDF Toolkit (with Markup/Text Box), PDF ⇔ Image, Image Studio & Convert, Office & Data, HTML & Markdown, Sign & PDF Markup, OCR & QR, Diff Studio, Metadata & C2PA, ZIP & Rename, and History. Use the selector above the tabs to toggle Auto-Scroll, Reorder, or Off.',
+      descJa: '「PDF編集・整理（マークアップ・テキストボックス含む）」「PDF ⇔ 画像」「画像編集・変換」「SVG編集・作成」「Office・データ表」「HTML・Markdown」「電子印鑑・署名・PDF注釈」「OCR・QR」「差分比較」「メタデータ・C2PA」「ZIP・一括リネーム」「履歴」から選択します。右上のメニューで「自動スクロール（順番固定）」「順番自動並び替え」「オフ」の3モードを切り替えられます。',
+      descEn: 'Choose from PDF Toolkit (with Markup/Text Box), PDF ⇔ Image, Image Studio & Convert, SVG Studio, Office & Data, HTML & Markdown, Sign & PDF Markup, OCR & QR, Diff Studio, Metadata & C2PA, ZIP & Rename, and History. Use the selector above the tabs to toggle Auto-Scroll, Reorder, or Off.',
     },
     {
       targetId: 'mainTabContentArea',
-      titleJa: '3. 編集・注釈・変換・メタデータ処理の実行',
-      titleEn: '3. Edit, Annotate, Convert & Inspect',
-      descJa: 'PDFへの日本語テキストボックス・手書き/図形マークアップ・印鑑捺印、EXIF/PNG/PDF/Office/C2PAなど全メタデータの編集とリスク確認、Office変換やOCRを実行します。他タブへ切り替えても作業内容は保持されます。',
-      descEn: 'Add Japanese text boxes & PDF markup, inspect/edit all metadata with risk guides, convert Office/data tables, run OCR, and more. Work stays intact across tabs.',
+      titleJa: '3. 編集・注釈・SVG編集・変換・メタデータ処理の実行',
+      titleEn: '3. Edit, Annotate, Vector Edit & Convert',
+      descJa: 'PDFへの日本語テキストボックス・手書き/図形マークアップ・印鑑捺印、SVGの図形追加/色一括置換/ViewBox調整/コード編集、EXIF/PNG/PDF/Office/C2PAなど全メタデータの編集とリスク確認、Office変換やOCRを実行します。他タブへ切り替えても作業内容は保持されます。',
+      descEn: 'Add Japanese text boxes & PDF markup, edit SVG vector shapes/colors/code, inspect/edit all metadata with risk guides, convert Office/data tables, run OCR, and more. Work stays intact across tabs.',
     },
     {
       targetId: 'statusQueueSection',
@@ -622,6 +623,21 @@ export default function App() {
               onResultReady={handleResultReady}
               onAddFiles={handleFilesAdded}
               onShowToast={showToast}
+              onOpenInSvgStudio={(file) => {
+                setActiveSharedFile(file);
+                handleSelectTab('svg-studio');
+              }}
+            />
+          </div>
+
+          <div style={{ display: activeTab === 'svg-studio' ? 'block' : 'none' }}>
+            <SvgEditorSuite
+              lang={lang}
+              sharedFile={activeSharedFile}
+              fileList={fileList}
+              onResultReady={handleResultReady}
+              onAddFiles={handleFilesAdded}
+              onShowToast={showToast}
             />
           </div>
 
@@ -838,11 +854,11 @@ export default function App() {
               </p>
             </div>
             <div className="info-sub-box">
-              <h4 className="break-keep">{lang === 'ja' ? 'PDF ⇔ Office変換 ＆ データ表・画像スタジオ' : 'PDF ⇔ Office, Data Tables & Image Studio'}</h4>
+              <h4 className="break-keep">{lang === 'ja' ? 'PDF ⇔ Office変換 ＆ データ表・画像・SVG編集スタジオ' : 'PDF ⇔ Office, Data Tables, Image & SVG Studio'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'PDFとWord・Excel・PowerPointの相互変換や、CSV/TSV/XLSX/JSON/HTML表/Markdown表の整形変換に対応。画像リサイズ・クロップ・モザイク/ぼかし・色調補正とPNG/JPG/WebP/BMP/ICO・PDF相互変換も行えます。'
-                  : 'Convert between PDF and Word/Excel/PowerPoint, transform CSV/TSV/XLSX/JSON/HTML/Markdown tables, and edit or convert images (PNG/JPG/WebP/BMP/ICO) and PDF pages.'}
+                  ? 'PDFとWord・Excel・PowerPointの相互変換やデータ表（CSV/TSV/XLSX/JSON/HTML/MD）変換に対応。画像加工・形式変換（PNG/JPG/WebP/BMP/ICO/SVG）に加え、専用の「SVG編集・作成」タブでベクター図形・パス・テキスト追加、パーツごとの頂点・制御点移動や中間頂点の追加/削除、色一括置換、レイヤー操作、ViewBox自動調整、SVGコード整形/軽量化および高解像度ラスタ書き出しが行えます（各エディタでCtrl+Z/Ctrl+Y対応）。'
+                  : 'Convert between PDF and Word/Excel/PowerPoint or transform data tables. Edit raster images (PNG/JPG/WebP/BMP/ICO/SVG), plus use SVG Studio to draw shapes/paths/text, move individual vertices and Bézier control handles per part, insert/delete nodes, batch-replace colors, manage layers, adjust viewBox, format/minify markup, and export scaled PNG/JPG/WebP (Ctrl+Z / Ctrl+Y supported across editors).'}
               </p>
             </div>
             <div className="info-sub-box">
@@ -901,8 +917,8 @@ export default function App() {
             <span>
               <strong>{lang === 'ja' ? '出力形式: ' : 'Output: '}</strong>
               {lang === 'ja'
-                ? 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), テキスト (TXT), 画像 (PNG, JPG, WebP, BMP, ICO), ZIP, メタデータ編集／削除済みオリジナル形式ファイル'
-                : 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), Plain Text (TXT), Images (PNG, JPG, WebP, BMP, ICO), ZIP, and metadata-edited or scrubbed original files'}
+                ? 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), テキスト (TXT), 画像 (PNG, JPG, WebP, BMP, ICO, SVG), ZIP, メタデータ編集／削除済みオリジナル形式ファイル'
+                : 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), Plain Text (TXT), Images (PNG, JPG, WebP, BMP, ICO, SVG), ZIP, and metadata-edited or scrubbed original files'}
             </span>
             <br />
             <span>
@@ -934,8 +950,8 @@ export default function App() {
             <li>
               <span>
                 {lang === 'ja'
-                  ? 'PDF編集・マークアップ（テキストボックス追加・黒塗り・電子印鑑）、Office/データ表変換、画像編集、HTML/Markdown編集、OCR・QR、差分比較、メタデータ・C2PA検査/全項目編集・リスク確認、ZIP処理を実行します。'
-                  : 'Run your edits or conversions: PDF markup & text boxes, electronic stamps, Office/data table conversion, image editing, HTML/Markdown preview, OCR/QR, diff comparison, full metadata/C2PA inspection & editing, or ZIP packaging.'}
+                  ? 'PDF編集・マークアップ（テキストボックス追加・黒塗り・電子印鑑）、画像編集・SVGベクター/コード編集、Office/データ表変換、HTML/Markdown編集、OCR・QR、差分比較、メタデータ・C2PA検査/全項目編集・リスク確認、ZIP処理を実行します。'
+                  : 'Run your edits or conversions: PDF markup & text boxes, electronic stamps, image editing or SVG vector/code editing, Office/data table conversion, HTML/Markdown preview, OCR/QR, diff comparison, full metadata/C2PA inspection & editing, or ZIP packaging.'}
               </span>
             </li>
             <li>
@@ -1006,8 +1022,8 @@ export default function App() {
             </summary>
             <div className="faq-content">
               {lang === 'ja'
-                ? 'はい。「PDF編集・整理」内の「マークアップ・テキスト追加」および「電子印鑑・署名・PDF注釈」タブの両方で対応しています。日本語や改行を含むテキストボックス、蛍光ハイライト、フリーハンドペン、矩形・楕円・矢印・直線、番号スタンプ、黒塗りをページ上にドラッグ配置して保存でき、1操作ずつ元に戻すことも可能です。'
-                : 'Yes. Both PDF Toolkit (Markup & Text tab) and Sign & PDF Markup let you place Japanese/multiline text boxes, highlights, freehand ink, shapes, arrows, numbered callouts, stamps, handwritten signatures, and blackouts directly onto PDF pages with undo support.'}
+                ? 'はい。「PDF編集・整理」内の「マークアップ・テキスト追加」および「電子印鑑・署名・PDF注釈」タブの両方で対応しています。日本語や改行を含むテキストボックス、蛍光ハイライト、フリーハンドペン、矩形・楕円・矢印・直線、番号スタンプ、黒塗りをページ上にドラッグ配置して保存でき、Ctrl+Z / Ctrl+Y による元に戻す・やり直しにも対応しています。'
+                : 'Yes. Both PDF Toolkit (Markup & Text tab) and Sign & PDF Markup let you place Japanese/multiline text boxes, highlights, freehand ink, shapes, arrows, numbered callouts, stamps, handwritten signatures, and blackouts directly onto PDF pages with Ctrl+Z / Ctrl+Y undo/redo support.'}
             </div>
           </details>
 
@@ -1032,6 +1048,18 @@ export default function App() {
               {lang === 'ja'
                 ? 'はい。タブバー右上の「タブ表示」メニューからいつでも3種類を切り替えられます。(1)「最適タブへ自動スクロール（順番固定）」: タブの位置を変えずに対応するタブへスクロール表示、(2)「使用状況・拡張子で順番を並び替え」: よく使うタブや拡張子に合うタブを左へ移動、(3)「オフ」: 順番固定のまま自動移動も行いません。'
                 : 'Yes. Use the "Tab Behavior" dropdown right above the tab strip to choose among three modes: Auto-Scroll to Match (keeps tab positions fixed), Reorder by Usage & Extension, or Off (completely manual).'}
+            </div>
+          </details>
+
+          <details className="faq-details">
+            <summary className="faq-summary">
+              <span>{lang === 'ja' ? 'Q8: SVGファイルの図形や色・テキスト・ソースコードを直接編集できますか？' : 'Q8: Can I edit SVG vector shapes, colors, text, and markup directly?'}</span>
+              <span>▼</span>
+            </summary>
+            <div className="faq-content">
+              {lang === 'ja'
+                ? 'はい。「SVG編集・作成」タブでSVGのベクター図形やテキストの選択・ドラッグ移動、「頂点編集」ツール（またはパーツのダブルクリック）によるパス/多角形/直線/四角形/円・楕円ごとの頂点・ベジェ制御点の移動・中間点追加・削除・座標数値編集、新規図形（四角形・円/楕円・直線・ペンパス・文字）追加、塗り/線色/線幅/不透明度/角丸調整、使用カラーの一括置換、レイヤー順変更、ViewBoxサイズ調整・自動フィット、SVGソースコードの整形・軽量化、およびSVG/PNG/JPG/WebP（1x〜4x倍率）書き出しまで端末内完結で行えます。Ctrl+Z（元に戻す）・Ctrl+Y（やり直し）のショートカットにも対応し、不要なスクリプト属性は自動サニタイズされます。'
+                : 'Yes. The SVG Studio tab supports selecting and dragging vector elements, per-part vertex & Bézier control handle dragging (plus midpoint insertion, node deletion, and numeric coordinates via Edit Nodes or double-clicking a shape), adding shapes/paths/text, editing fill/stroke/opacity/radius, batch-replacing colors, managing layers, fitting/editing viewBox, formatting or minifying markup, Ctrl+Z / Ctrl+Y shortcuts, and exporting SVG or 1x–4x PNG/JPG/WebP locally with automatic script sanitization.'}
             </div>
           </details>
         </div>
@@ -1090,7 +1118,7 @@ export default function App() {
                 <div className="terms-split-box">
                   <h5>{lang === 'ja' ? '利用規約' : 'Terms of Service'}</h5>
                   <div style={{ fontSize: '0.78rem', lineHeight: '1.5' }}>
-                    <p><strong>{lang === 'ja' ? '第1条（適用）' : 'Art 1: Scope'}</strong><br />{lang === 'ja' ? '本ツールが提供するPDF編集・注釈、Office変換、画像処理、メタデータ・C2PA編集、OCR等の利用条件を定めます。' : 'Applies to all PDF editing/markup, Office conversion, image, metadata/C2PA, and OCR features provided by this tool.'}</p>
+                    <p><strong>{lang === 'ja' ? '第1条（適用）' : 'Art 1: Scope'}</strong><br />{lang === 'ja' ? '本ツールが提供するPDF編集・注釈、Office変換、画像・SVG編集、メタデータ・C2PA編集、OCR等の利用条件を定めます。' : 'Applies to all PDF editing/markup, Office conversion, image/SVG editing, metadata/C2PA, and OCR features provided by this tool.'}</p>
                     <p style={{ marginTop: '6px' }}><strong>{lang === 'ja' ? '第2条（権利・法令遵守と不正改変の禁止）' : 'Art 2: Lawful Use & Provenance'}</strong><br />{lang === 'ja' ? '適法な権利を有するファイルのみを扱い、電子印鑑やC2PA・日時の不正な偽装・悪用は行わないものとします。' : 'Only process files you are authorized to edit, and never falsify stamps, C2PA credentials, or timestamps maliciously.'}</p>
                     <p style={{ marginTop: '6px' }}><strong>{lang === 'ja' ? '第3条（免責事項）' : 'Art 3: Disclaimer'}</strong><br />{lang === 'ja' ? '完全ローカル処理で動作し、データ破損やメタデータ改変による互換性・署名失効等の責任は負いません（事前バックアップ推奨）。' : 'Runs 100% locally; developers assume no liability for data loss, compatibility changes, or invalidated signatures.'}</p>
                   </div>
@@ -1098,7 +1126,7 @@ export default function App() {
                 <div className="terms-split-box">
                   <h5>{lang === 'ja' ? 'プライバシーポリシー' : 'Privacy Policy'}</h5>
                   <div style={{ fontSize: '0.78rem', lineHeight: '1.5' }}>
-                    <p><strong>{lang === 'ja' ? '1. 完全端末内処理（サーバー非送信）' : '1. 100% Local Browser Execution'}</strong><br />{lang === 'ja' ? 'PDF・Office・画像・メタデータ・OCR・カメラQR映像はブラウザ内のみで処理され、外部サーバーへ送信されません。' : 'All document, image, metadata, OCR, and camera QR processing stays strictly inside your browser.'}</p>
+                    <p><strong>{lang === 'ja' ? '1. 完全端末内処理（サーバー非送信）' : '1. 100% Local Browser Execution'}</strong><br />{lang === 'ja' ? 'PDF・Office・画像・SVG・メタデータ・OCR・カメラQR映像はブラウザ内のみで処理され、外部サーバーへ送信されません。' : 'All document, image, SVG, metadata, OCR, and camera QR processing stays strictly inside your browser.'}</p>
                     <p style={{ marginTop: '6px' }}><strong>{lang === 'ja' ? '2. 端末内保存・Google Drive直接通信' : '2. Local Storage & Google Drive Direct'}</strong><br />{lang === 'ja' ? '設定・タブ表示設定/利用統計・作業キューは端末内のみに保存し、Drive連携時は公式OAuth 2.0でGoogleへ直接通信します。' : 'Preferences, tab settings/usage, and drafts stay in device storage; Drive sync connects directly via official OAuth 2.0.'}</p>
                   </div>
                 </div>
@@ -1272,8 +1300,8 @@ export default function App() {
                   <p><strong>{lang === 'ja' ? '第1条（適用）' : 'Article 1 (Scope & Application)'}</strong></p>
                   <p className="text-slate-600 dark:text-slate-300">
                     {lang === 'ja'
-                      ? '本規約は、Universal Media & Document Studio Pro（以下「本ツール」）が提供するPDF編集・マークアップ・注釈・墨消し、Office・データ表変換、画像編集、HTML/Markdown編集、電子印鑑・署名、OCR・QR、差分比較、メタデータ・C2PA検査/編集/削除、ZIP処理、作業バックアップおよびオフラインパック等すべての機能の利用条件を定めるものです。利用者は本ツールの利用により本規約に同意したものとみなされます。'
-                      : 'These Terms of Service govern all features of Universal Media & Document Studio Pro ("the Tool"), including PDF editing/markup/redaction, Office & data table conversion, image editing, HTML/Markdown studio, stamps & signatures, OCR/QR, diff comparison, metadata & C2PA inspection/editing/removal, ZIP archiving, workspace backup, and offline packs.'}
+                      ? '本規約は、Universal Media & Document Studio Pro（以下「本ツール」）が提供するPDF編集・マークアップ・注釈・墨消し、Office・データ表変換、画像・SVGベクター編集、HTML/Markdown編集、電子印鑑・署名、OCR・QR、差分比較、メタデータ・C2PA検査/編集/削除、ZIP処理、作業バックアップおよびオフラインパック等すべての機能の利用条件を定めるものです。利用者は本ツールの利用により本規約に同意したものとみなされます。'
+                      : 'These Terms of Service govern all features of Universal Media & Document Studio Pro ("the Tool"), including PDF editing/markup/redaction, Office & data table conversion, image & SVG vector editing, HTML/Markdown studio, stamps & signatures, OCR/QR, diff comparison, metadata & C2PA inspection/editing/removal, ZIP archiving, workspace backup, and offline packs.'}
                   </p>
                 </div>
                 <div>
@@ -1354,8 +1382,8 @@ export default function App() {
                   <p><strong>{lang === 'ja' ? '1. 完全ローカル（端末内）処理の原則' : '1. Principle of 100% Local (On-Device) Processing'}</strong></p>
                   <p className="text-slate-600 dark:text-slate-300">
                     {lang === 'ja'
-                      ? '本ツールはWebAssemblyおよびクライアントサイドJavaScript技術を用い、PDF編集・マークアップ・テキスト追加・黒塗り、Office・データ表変換、画像編集・形式変換、電子印鑑・手書き署名、OCR文字認識、HTML/Markdown編集・プレビュー、差分比較、メタデータ（EXIF/GPS/PNG/PDF/Office/XMP/MP4等）・C2PAの検査/編集/削除、ZIP処理をユーザーのブラウザ（端末内）だけで完結して実行します。処理対象のファイルデータが外部サーバーへアップロードまたは保存されることは一切ありません。'
-                      : 'Using WebAssembly and client-side JavaScript, the Tool performs PDF editing/markup/redaction, Office & data table conversion, image editing, digital stamps/signatures, OCR, HTML/Markdown editing & preview, diff comparison, metadata/C2PA inspection/editing/removal, and ZIP archiving entirely inside your browser. Target file data is never uploaded to or stored on external servers.'}
+                      ? '本ツールはWebAssemblyおよびクライアントサイドJavaScript技術を用い、PDF編集・マークアップ・テキスト追加・黒塗り、Office・データ表変換、画像編集・形式変換、SVGベクター/コード編集（危険なスクリプト要素の自動サニタイズを含む）、電子印鑑・手書き署名、OCR文字認識、HTML/Markdown編集・プレビュー、差分比較、メタデータ（EXIF/GPS/PNG/PDF/Office/XMP/MP4等）・C2PAの検査/編集/削除、ZIP処理をユーザーのブラウザ（端末内）だけで完結して実行します。処理対象のファイルデータが外部サーバーへアップロードまたは保存されることは一切ありません。'
+                      : 'Using WebAssembly and client-side JavaScript, the Tool performs PDF editing/markup/redaction, Office & data table conversion, image editing, SVG vector/markup editing (with automatic script sanitization), digital stamps/signatures, OCR, HTML/Markdown editing & preview, diff comparison, metadata/C2PA inspection/editing/removal, and ZIP archiving entirely inside your browser. Target file data is never uploaded to or stored on external servers.'}
                   </p>
                 </div>
                 <div>

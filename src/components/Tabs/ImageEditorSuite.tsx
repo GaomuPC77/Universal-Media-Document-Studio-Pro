@@ -37,6 +37,7 @@ interface ImageEditorSuiteProps {
   onResultReady?: (item: FileItem) => void;
   onShowToast?: (msg: string) => void;
   onAddFiles?: (files: File[]) => void;
+  onOpenInSvgStudio?: (file: File) => void;
 }
 
 type EditorTool = 'adjust' | 'filter' | 'crop' | 'mosaic' | 'markup' | 'text';
@@ -71,6 +72,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
   onResultReady,
   onShowToast,
   onAddFiles,
+  onOpenInSvgStudio,
 }) => {
   const [activeTool, setActiveTool] = useState<EditorTool>('adjust');
   const [selectedFileId, setSelectedFileId] = useState<string>('');
@@ -78,6 +80,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
   const [pendingPromptFile, setPendingPromptFile] = useState<File | null>(null);
 
   // Canvas & History State
+  const editorRootRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -136,7 +139,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
   const [textPos, setTextPos] = useState<{ x: number; y: number }>({ x: 0.5, y: 0.5 });
 
   // Export Format
-  const [exportFormat, setExportFormat] = useState<'png' | 'jpg' | 'webp' | 'bmp' | 'ico'>('png');
+  const [exportFormat, setExportFormat] = useState<'png' | 'jpg' | 'webp' | 'bmp' | 'ico' | 'svg'>('png');
 
   // Pointer interaction state
   const isDrawingRef = useRef<boolean>(false);
@@ -358,7 +361,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
   };
 
   // Undo / Redo
-  const handleUndo = () => {
+  const handleUndo = useCallback(() => {
     if (historyIndex <= 0) return;
     const nextIdx = historyIndex - 1;
     const url = history[nextIdx];
@@ -370,9 +373,9 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
       setAdjustments(DEFAULT_ADJUSTMENTS);
     };
     img.src = url;
-  };
+  }, [history, historyIndex]);
 
-  const handleRedo = () => {
+  const handleRedo = useCallback(() => {
     if (historyIndex >= history.length - 1) return;
     const nextIdx = historyIndex + 1;
     const url = history[nextIdx];
@@ -384,7 +387,40 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
       setAdjustments(DEFAULT_ADJUSTMENTS);
     };
     img.src = url;
-  };
+  }, [history, historyIndex]);
+
+  const handleUndoRef = useRef(handleUndo);
+  const handleRedoRef = useRef(handleRedo);
+  handleUndoRef.current = handleUndo;
+  handleRedoRef.current = handleRedo;
+
+  // Keyboard shortcuts: Ctrl+Z / Ctrl+Y / Cmd+Shift+Z (only when editor tab is visible)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!editorRootRef.current || editorRootRef.current.offsetParent === null) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (
+        active &&
+        (active.tagName === 'INPUT' ||
+          active.tagName === 'TEXTAREA' ||
+          active.tagName === 'SELECT' ||
+          active.isContentEditable)
+      ) {
+        return;
+      }
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndoRef.current();
+      } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        handleRedoRef.current();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   // Rotate 90 deg or Flip
   const handleTransform = (type: 'rotate90' | 'flipH' | 'flipV') => {
@@ -827,6 +863,19 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
       return;
     }
 
+    if (exportFormat === 'svg') {
+      try {
+        const pngDataUrl = exportCanvas.toDataURL('image/png');
+        const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${exportCanvas.width} ${exportCanvas.height}" width="${exportCanvas.width}" height="${exportCanvas.height}">\n  <image href="${pngDataUrl}" width="${exportCanvas.width}" height="${exportCanvas.height}" />\n</svg>`;
+        const svgBlob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+        await finishExport(svgBlob, 'image/svg+xml');
+      } catch (e: any) {
+        console.error('SVG export failed:', e);
+        if (onShowToast) onShowToast(lang === 'ja' ? 'SVGへの書き出しに失敗しました' : 'Failed to export SVG');
+      }
+      return;
+    }
+
     const mimeMap: Record<'png' | 'jpg' | 'webp', string> = {
       png: 'image/png',
       jpg: 'image/jpeg',
@@ -854,7 +903,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
   ];
 
   return (
-    <div className="flex flex-col gap-5">
+    <div ref={editorRootRef} className="flex flex-col gap-5">
       {/* Add To Queue Confirmation Modal */}
       <AddToQueuePromptModal
         file={pendingPromptFile}
@@ -1091,7 +1140,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
                   onClick={handleUndo}
                   disabled={historyIndex <= 0}
                   className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-800"
-                  title={lang === 'ja' ? '元に戻す (Undo)' : 'Undo'}
+                  title={lang === 'ja' ? '元に戻す (Ctrl+Z)' : 'Undo (Ctrl+Z)'}
                 >
                   <Undo2 className="w-4 h-4" />
                 </button>
@@ -1099,7 +1148,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
                   onClick={handleRedo}
                   disabled={historyIndex >= history.length - 1}
                   className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-800"
-                  title={lang === 'ja' ? 'やり直す (Redo)' : 'Redo'}
+                  title={lang === 'ja' ? 'やり直す (Ctrl+Y)' : 'Redo (Ctrl+Y)'}
                 >
                   <Redo2 className="w-4 h-4" />
                 </button>
@@ -1160,6 +1209,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
                   <option value="webp">WebP (.webp)</option>
                   <option value="bmp">BMP (.bmp)</option>
                   <option value="ico">ICO (.ico)</option>
+                  <option value="svg">SVG (.svg)</option>
                 </select>
 
                 <button
@@ -1171,6 +1221,24 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* SVG Vector Studio Shortcut when editing an SVG */}
+            {currentFile && /\.svg$/i.test(currentFile.name) && onOpenInSvgStudio && (
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/70 dark:bg-blue-950/30 text-xs">
+                <span className="text-slate-700 dark:text-slate-200">
+                  {lang === 'ja'
+                    ? 'この画面はラスタ画像（PNG等）として編集します。パス・色・テキスト・ViewBoxのベクター編集はSVG編集タブをご利用ください。'
+                    : 'This tab edits as raster pixels. Open SVG Studio to edit vector paths, colors, text, or SVG code directly.'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onOpenInSvgStudio(currentFile)}
+                  className="px-2.5 py-1 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-semibold whitespace-nowrap shrink-0"
+                >
+                  {lang === 'ja' ? 'SVG編集タブで開く' : 'Open in SVG Studio'}
+                </button>
+              </div>
+            )}
 
             {/* Canvas Container */}
             <div

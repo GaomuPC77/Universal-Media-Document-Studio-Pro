@@ -12,14 +12,15 @@ export const TAB_DEFINITIONS: TabMeta[] = [
   { id: 'pdf-suite', labelJa: 'PDF編集・整理', labelEn: 'PDF Toolkit', baseIndex: 0 },
   { id: 'pdf-image', labelJa: 'PDF ⇔ 画像', labelEn: 'PDF ⇔ Image', baseIndex: 1 },
   { id: 'image-editor', labelJa: '画像編集・変換', labelEn: 'Image Studio & Convert', baseIndex: 2 },
-  { id: 'office-suite', labelJa: 'Office・データ表', labelEn: 'Office & Data Suite', baseIndex: 3 },
-  { id: 'html-studio', labelJa: 'HTML・Markdown', labelEn: 'HTML & Markdown', baseIndex: 4 },
-  { id: 'sign-stamp', labelJa: '電子印鑑・署名・PDF注釈', labelEn: 'Sign & PDF Markup', baseIndex: 5 },
-  { id: 'ocr-qr', labelJa: 'OCR・QR', labelEn: 'OCR & QR', baseIndex: 6 },
-  { id: 'diff-suite', labelJa: '差分比較', labelEn: 'Diff Studio', baseIndex: 7 },
-  { id: 'metadata-studio', labelJa: 'メタデータ・C2PA', labelEn: 'Metadata & C2PA', baseIndex: 8 },
-  { id: 'zip-suite', labelJa: 'ZIP・一括リネーム', labelEn: 'ZIP & Rename', baseIndex: 9 },
-  { id: 'history', labelJa: '履歴', labelEn: 'History', baseIndex: 10, pinnedLast: true },
+  { id: 'svg-studio', labelJa: 'SVG編集・作成', labelEn: 'SVG Studio', baseIndex: 3 },
+  { id: 'office-suite', labelJa: 'Office・データ表', labelEn: 'Office & Data Suite', baseIndex: 4 },
+  { id: 'html-studio', labelJa: 'HTML・Markdown', labelEn: 'HTML & Markdown', baseIndex: 5 },
+  { id: 'sign-stamp', labelJa: '電子印鑑・署名・PDF注釈', labelEn: 'Sign & PDF Markup', baseIndex: 6 },
+  { id: 'ocr-qr', labelJa: 'OCR・QR', labelEn: 'OCR & QR', baseIndex: 7 },
+  { id: 'diff-suite', labelJa: '差分比較', labelEn: 'Diff Studio', baseIndex: 8 },
+  { id: 'metadata-studio', labelJa: 'メタデータ・C2PA', labelEn: 'Metadata & C2PA', baseIndex: 9 },
+  { id: 'zip-suite', labelJa: 'ZIP・一括リネーム', labelEn: 'ZIP & Rename', baseIndex: 10 },
+  { id: 'history', labelJa: '履歴', labelEn: 'History', baseIndex: 11, pinnedLast: true },
 ];
 
 export type TabAdaptiveMode = 'reorder' | 'scroll' | 'off';
@@ -149,8 +150,9 @@ function getExtensionAffinity(ext: string): Record<string, number> {
       };
     case 'svg':
       return {
-        'image-editor': 34,
-        'html-studio': 26,
+        'svg-studio': 42,
+        'image-editor': 26,
+        'html-studio': 22,
         'pdf-image': 18,
         'metadata-studio': 16,
       };

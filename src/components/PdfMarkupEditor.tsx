@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   MousePointer2,
   Type,
@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Trash2,
   Undo2,
+  Redo2,
   CheckSquare,
   ZoomIn,
   ZoomOut,
@@ -93,7 +94,9 @@ export const PdfMarkupEditor: React.FC<PdfMarkupEditorProps> = ({
   const [stamps, setStamps] = useState<SignatureStampPlacement[]>([]);
   const [redactions, setRedactions] = useState<RedactionBox[]>([]);
   const [undoStack, setUndoStack] = useState<HistorySnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<HistorySnapshot[]>([]);
 
+  const rootRef = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState<SelectedRef>(null);
   const [isExporting, setIsExporting] = useState(false);
 
@@ -151,6 +154,7 @@ export const PdfMarkupEditor: React.FC<PdfMarkupEditorProps> = ({
     setStamps([]);
     setRedactions([]);
     setUndoStack([]);
+    setRedoStack([]);
     setSelected(null);
     setCurrentPageIndex(0);
   }, [pdfFile]);
@@ -162,18 +166,71 @@ export const PdfMarkupEditor: React.FC<PdfMarkupEditorProps> = ({
       ...prev.slice(-24),
       { textBoxes: [...textBoxes], markups: [...markups], stamps: [...stamps], redactions: [...redactions] },
     ]);
+    setRedoStack([]);
   };
 
-  const handleUndo = () => {
+  const handleUndo = useCallback(() => {
     if (undoStack.length === 0) return;
     const prev = undoStack[undoStack.length - 1];
+    setRedoStack((r) => [
+      ...r.slice(-24),
+      { textBoxes: [...textBoxes], markups: [...markups], stamps: [...stamps], redactions: [...redactions] },
+    ]);
     setTextBoxes(prev.textBoxes);
     setMarkups(prev.markups);
     setStamps(prev.stamps);
     setRedactions(prev.redactions);
     setUndoStack((s) => s.slice(0, -1));
     setSelected(null);
-  };
+  }, [undoStack, textBoxes, markups, stamps, redactions]);
+
+  const handleRedo = useCallback(() => {
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    setUndoStack((u) => [
+      ...u.slice(-24),
+      { textBoxes: [...textBoxes], markups: [...markups], stamps: [...stamps], redactions: [...redactions] },
+    ]);
+    setTextBoxes(next.textBoxes);
+    setMarkups(next.markups);
+    setStamps(next.stamps);
+    setRedactions(next.redactions);
+    setRedoStack((s) => s.slice(0, -1));
+    setSelected(null);
+  }, [redoStack, textBoxes, markups, stamps, redactions]);
+
+  const handleUndoRef = useRef(handleUndo);
+  const handleRedoRef = useRef(handleRedo);
+  handleUndoRef.current = handleUndo;
+  handleRedoRef.current = handleRedo;
+
+  // Keyboard shortcuts: Ctrl+Z / Ctrl+Y / Cmd+Shift+Z (scoped to visible editor)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!rootRef.current || rootRef.current.offsetParent === null) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (
+        active &&
+        (active.tagName === 'INPUT' ||
+          active.tagName === 'TEXTAREA' ||
+          active.tagName === 'SELECT' ||
+          active.isContentEditable)
+      ) {
+        return;
+      }
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndoRef.current();
+      } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        handleRedoRef.current();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const toPageCoords = (clientX: number, clientY: number) => {
     const el = canvasWrapRef.current;
@@ -661,7 +718,7 @@ export const PdfMarkupEditor: React.FC<PdfMarkupEditorProps> = ({
   };
 
   return (
-    <div className="flex flex-col gap-3">
+    <div ref={rootRef} className="flex flex-col gap-3">
       {/* Main Annotation Toolbar */}
       <div className="p-3 bg-slate-100 dark:bg-slate-800/90 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -687,16 +744,25 @@ export const PdfMarkupEditor: React.FC<PdfMarkupEditorProps> = ({
             })}
           </div>
 
-          {/* Undo, Clear, Export */}
+          {/* Undo, Redo, Clear, Export */}
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               onClick={handleUndo}
               disabled={undoStack.length === 0}
               className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-300 disabled:opacity-40 inline-flex items-center gap-1 cursor-pointer"
-              title={lang === 'ja' ? '直前の操作を元に戻す' : 'Undo'}
+              title={lang === 'ja' ? '直前の操作を元に戻す (Ctrl+Z)' : 'Undo (Ctrl+Z)'}
             >
               <Undo2 className="w-3.5 h-3.5" />
               <span>{lang === 'ja' ? '戻す' : 'Undo'}</span>
+            </button>
+            <button
+              onClick={handleRedo}
+              disabled={redoStack.length === 0}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-700 dark:text-slate-300 disabled:opacity-40 inline-flex items-center gap-1 cursor-pointer"
+              title={lang === 'ja' ? '取り消した操作をやり直す (Ctrl+Y)' : 'Redo (Ctrl+Y)'}
+            >
+              <Redo2 className="w-3.5 h-3.5" />
+              <span>{lang === 'ja' ? 'やり直し' : 'Redo'}</span>
             </button>
             <button
               onClick={clearCurrentPageAnnotations}
