@@ -19,6 +19,7 @@ import { saveProcessedFile } from '../../utils/historyDb';
 import { FileItem } from '../../types';
 import { notifyCompletion } from '../../utils/notification';
 import { AddToQueuePromptModal } from '../Modals/AddToQueuePromptModal';
+import { createUniversalPreviewUrl } from '../../utils/imageCodecUtils';
 
 interface PdfImageSuiteProps {
   lang: 'ja' | 'en';
@@ -45,7 +46,7 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
   // PDF to Image state
   const [selectedPdfId, setSelectedPdfId] = useState<string>('');
   const [pdfFile, setPdfFile] = useState<File | null>(null);
-  const [imgFormat, setImgFormat] = useState<'png' | 'jpg' | 'webp'>('png');
+  const [imgFormat, setImgFormat] = useState<'png' | 'jpg' | 'webp' | 'bmp' | 'ico' | 'ppm'>('png');
   const [dpi, setDpi] = useState<number>(150);
   const [isConverting, setIsConverting] = useState(false);
   const [convertedImages, setConvertedImages] = useState<{ name: string; blob: Blob; pageNumber: number; url: string }[]>([]);
@@ -58,19 +59,41 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
   const [margin, setMargin] = useState<number>(20);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
+  const appendImageFileWithPreview = async (file: File, existingId?: string) => {
+    const previewUrl = await createUniversalPreviewUrl(file, file.name);
+    setImageFiles((prev) => [
+      ...prev,
+      {
+        id: existingId || `img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        file,
+        name: file.name,
+        previewUrl,
+        size: file.size,
+      },
+    ]);
+  };
+
   // Auto load shared file or from fileList
   useEffect(() => {
+    let cancelled = false;
     if (sharedFile) {
       if (sharedFile.name.toLowerCase().endsWith('.pdf') || sharedFile.type === 'application/pdf') {
         setActiveMode('pdf-to-img');
         handleSelectPdf(sharedFile);
-      } else if (['image/png', 'image/jpeg', 'image/webp'].includes(sharedFile.type) || /\.(png|jpe?g|webp|bmp)$/i.test(sharedFile.name)) {
+      } else if (
+        ['image/png', 'image/jpeg', 'image/webp', 'image/bmp', 'image/x-icon', 'image/x-portable-pixmap'].includes(
+          sharedFile.type
+        ) ||
+        /\.(png|jpe?g|webp|bmp|ico|ppm|svg|gif)$/i.test(sharedFile.name)
+      ) {
         setActiveMode('img-to-pdf');
-        const url = URL.createObjectURL(sharedFile);
-        setImageFiles((prev) => [
-          ...prev,
-          { id: `img_${Date.now()}`, file: sharedFile, name: sharedFile.name, previewUrl: url, size: sharedFile.size },
-        ]);
+        createUniversalPreviewUrl(sharedFile, sharedFile.name).then((url) => {
+          if (cancelled) return;
+          setImageFiles((prev) => [
+            ...prev,
+            { id: `img_${Date.now()}`, file: sharedFile, name: sharedFile.name, previewUrl: url, size: sharedFile.size },
+          ]);
+        });
       }
     } else if (fileList.length > 0) {
       if (!pdfFile) {
@@ -82,20 +105,27 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
       }
       // Populate image files if in img-to-pdf mode and none loaded
       if (imageFiles.length === 0) {
-        const loadedImgs = fileList.filter((f) => ['png', 'jpg', 'jpeg', 'webp', 'bmp'].includes(f.format) && f.file);
+        const loadedImgs = fileList.filter(
+          (f) => ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'ico', 'ppm', 'svg', 'gif'].includes(f.format) && f.file
+        );
         if (loadedImgs.length > 0) {
-          setImageFiles(
-            loadedImgs.map((img) => ({
+          Promise.all(
+            loadedImgs.map(async (img) => ({
               id: img.id,
               file: img.file!,
               name: img.name,
-              previewUrl: URL.createObjectURL(img.file!),
+              previewUrl: img.previewUrl || (await createUniversalPreviewUrl(img.file!, img.format)),
               size: img.size,
             }))
-          );
+          ).then((items) => {
+            if (!cancelled) setImageFiles(items);
+          });
         }
       }
     }
+    return () => {
+      cancelled = true;
+    };
   }, [sharedFile, fileList]);
 
   // Handle PDF file selection
@@ -122,10 +152,12 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
         onProgress: (current, total) => setConvertProgress({ current, total }),
       });
 
-      const itemsWithUrls = results.map((r) => ({
-        ...r,
-        url: URL.createObjectURL(r.blob),
-      }));
+      const itemsWithUrls = await Promise.all(
+        results.map(async (r) => ({
+          ...r,
+          url: await createUniversalPreviewUrl(r.blob, imgFormat),
+        }))
+      );
 
       setConvertedImages(itemsWithUrls);
 
@@ -133,14 +165,22 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
       if (results.length === 1) {
         const single = results[0];
         const resName = `${baseName}.${imgFormat}`;
+        const mime =
+          imgFormat === 'jpg'
+            ? 'image/jpeg'
+            : imgFormat === 'ico'
+            ? 'image/x-icon'
+            : imgFormat === 'ppm'
+            ? 'image/x-portable-pixmap'
+            : `image/${imgFormat}`;
         await saveProcessedFile(`pdf_img_${Date.now()}`, pdfFile.name, resName, single.blob, imgFormat);
         if (onResultReady) {
           onResultReady({
             id: `res_img_${Date.now()}`,
             name: resName,
-            file: new File([single.blob], resName, { type: `image/${imgFormat}` }),
+            file: new File([single.blob], resName, { type: mime }),
             size: single.blob.size,
-            type: `image/${imgFormat}`,
+            type: mime,
             format: imgFormat as any,
             targetFormat: imgFormat as any,
             status: 'done',
@@ -286,11 +326,7 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
           if (mode === 'pdf') {
             handleSelectPdf(file);
           } else {
-            const url = URL.createObjectURL(file);
-            setImageFiles((prev) => [
-              ...prev,
-              { id: `img_${Date.now()}`, file, name: file.name, previewUrl: url, size: file.size },
-            ]);
+            appendImageFileWithPreview(file);
           }
           if (onShowToast) {
             onShowToast(lang === 'ja' ? '変換・処理ステータス（全体キュー）に追加しました' : 'Added to global status queue');
@@ -303,11 +339,7 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
           if (mode === 'pdf') {
             handleSelectPdf(file);
           } else {
-            const url = URL.createObjectURL(file);
-            setImageFiles((prev) => [
-              ...prev,
-              { id: `img_${Date.now()}`, file, name: file.name, previewUrl: url, size: file.size },
-            ]);
+            appendImageFileWithPreview(file);
           }
           if (onShowToast) {
             onShowToast(lang === 'ja' ? 'このタブのみに読み込みました' : 'Loaded into this tab only');
@@ -403,12 +435,12 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label>{lang === 'ja' ? '画像形式:' : 'Output Image Format:'}</label>
-              <div className="flex gap-2">
-                {(['png', 'jpg', 'webp'] as const).map((fmt) => (
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                {(['png', 'jpg', 'webp', 'bmp', 'ico', 'ppm'] as const).map((fmt) => (
                   <button
                     key={fmt}
                     onClick={() => setImgFormat(fmt)}
-                    className={`flex-1 py-2 text-xs font-bold rounded-lg border uppercase transition ${
+                    className={`py-2 px-1 text-xs font-bold rounded-lg border uppercase transition ${
                       imgFormat === fmt
                         ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'
                         : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
@@ -535,11 +567,7 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
                 }
                 const found = fileList.find((f) => f.id === val);
                 if (found && found.file) {
-                  const url = URL.createObjectURL(found.file);
-                  setImageFiles((prev) => [
-                    ...prev,
-                    { id: `img_${Date.now()}_${Math.random()}`, file: found.file!, name: found.name, previewUrl: url, size: found.size },
-                  ]);
+                  appendImageFileWithPreview(found.file);
                 }
               }}
               className="main-select"
@@ -549,7 +577,7 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
                 {lang === 'ja' ? '+ 新しい画像を端末からアップロード...' : '+ Upload New Image File...'}
               </option>
               {fileList
-                .filter((f) => ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif'].includes(f.format) || /\.(png|jpe?g|webp|svg|bmp|gif)$/i.test(f.name))
+                .filter((f) => ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'ico', 'ppm', 'gif'].includes(f.format) || /\.(png|jpe?g|webp|svg|bmp|ico|ppm|gif)$/i.test(f.name))
                 .map((f) => (
                   <option key={f.id} value={f.id}>
                     {f.name} ({(f.size / 1024).toFixed(1)} KB)
@@ -559,20 +587,24 @@ export const PdfImageSuite: React.FC<PdfImageSuiteProps> = ({
             <input
               ref={imageInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,.ico,.ppm,.bmp,image/x-icon,image/x-portable-pixmap"
               multiple
               className="hidden"
               onChange={(e) => {
                 if (e.target.files && e.target.files.length > 0) {
-                  const newImgs = Array.from(e.target.files).map((f: File) => ({
-                    id: `img_${Date.now()}_${Math.random()}`,
-                    file: f,
-                    name: f.name,
-                    previewUrl: URL.createObjectURL(f),
-                    size: f.size,
-                  }));
-                  setImageFiles((prev) => [...prev, ...newImgs]);
-                  if (onAddFiles) onAddFiles(Array.from(e.target.files) as File[]);
+                  const selected = Array.from(e.target.files) as File[];
+                  Promise.all(
+                    selected.map(async (f: File) => ({
+                      id: `img_${Date.now()}_${Math.random()}`,
+                      file: f,
+                      name: f.name,
+                      previewUrl: await createUniversalPreviewUrl(f, f.name),
+                      size: f.size,
+                    }))
+                  ).then((newImgs) => {
+                    setImageFiles((prev) => [...prev, ...newImgs]);
+                  });
+                  if (onAddFiles) onAddFiles(selected);
                   e.target.value = '';
                 }
               }}

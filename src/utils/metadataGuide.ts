@@ -66,6 +66,33 @@ export function getMetadataFieldGuide(tag: MetadataTagItem, lang: 'ja' | 'en'): 
     };
   }
 
+  // ---- BMP / ICO / PPM Structural Headers & Comments ----
+  if (id.startsWith('ppm_comment_')) {
+    return {
+      purpose: ja
+        ? 'PPM（Netpbm）ヘッダ内に埋め込まれた「#」コメント行です。作成ソフト名、パラメータ、撮影メモなどが記述されます。'
+        : 'Comment line (#) embedded inside the PPM/Netpbm header, often containing generator hints or notes.',
+      riskLevel: 'low',
+      risk: ja
+        ? '画像のピクセルデータには影響しません。環境名や作成者メモが含まれている場合は編集・削除できます。'
+        : 'Does not affect pixel raster data. Safe to edit or strip when removing software/author hints.',
+      inputKind: 'text',
+    };
+  }
+
+  if (id.startsWith('bmp_') || id.startsWith('ico_') || id.startsWith('ppm_')) {
+    return {
+      purpose: ja
+        ? 'BMP / ICO / PPM（Netpbm P3/P6）画像の構造ヘッダ情報（解像度、色深度・格納アイコンフレーム一覧、P3/P6形式識別子など）です。'
+        : 'Structural raster header property (dimensions, bit depth, ICO frame directory, or Netpbm P3/P6 format header).',
+      riskLevel: 'high',
+      risk: ja
+        ? '画素データと密接に結びついた物理ヘッダ値のため直接の文字書き換えはできません。形式・解像度の変更は「画像編集・変換」タブをご利用ください。'
+        : 'Physical raster header bound directly to pixel layout; use the Image Editor / Batch Converter tab to change dimensions or format.',
+      inputKind: 'readonly-physical',
+    };
+  }
+
   // ---- C2PA Content Credentials ----
   if (tag.group === 'C2PA' || id.startsWith('c2pa_') || id === 'xmp_c2pa_provenance' || keyLower.includes('digitalsourcetype') || keyLower.includes('provenance')) {
     return {

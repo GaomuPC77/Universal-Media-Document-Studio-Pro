@@ -7,8 +7,11 @@
 
 import * as XLSX from 'xlsx';
 import { parseSpreadsheet, exportSpreadsheet, createDocxFromText } from './officeUtils';
+import { canvasToPpmBlob, decodeAnyImageToCanvas } from './imageCodecUtils';
 
-export type ImageTargetFormat = 'png' | 'jpg' | 'jpeg' | 'webp' | 'bmp' | 'ico';
+export { canvasToPpmBlob, decodeAnyImageToCanvas };
+
+export type ImageTargetFormat = 'png' | 'jpg' | 'jpeg' | 'webp' | 'bmp' | 'ico' | 'ppm';
 export type DataTargetFormat = 'csv' | 'tsv' | 'xlsx' | 'json' | 'html' | 'md';
 export type TextTargetFormat = 'docx' | 'html' | 'md' | 'txt';
 export type AudioTargetFormat = 'wav';
@@ -22,6 +25,7 @@ export interface ImageConversionOptions {
   fillBackgroundForOpaque: boolean;
   backgroundColor: string; // e.g. '#FFFFFF'
   icoSizes?: number[]; // [16, 32, 48, 64, 128, 256]
+  ppmVariant?: 'P6' | 'P3'; // P6 binary (default) or P3 ASCII
 }
 
 /**
@@ -90,15 +94,28 @@ export function canvasToBmpBlob(canvas: HTMLCanvasElement): Blob {
 }
 
 /**
- * Generate standard multi-resolution ICO file containing PNG-encoded icon frames
+ * Generate standard multi-resolution ICO file containing PNG-encoded icon frames.
+ * Preserves source aspect ratio centered cleanly inside square icon frames.
  */
 export async function canvasToIcoBlob(
   sourceImage: CanvasImageSource,
   sizes: number[] = [16, 32, 48, 64, 128, 256]
 ): Promise<Blob> {
   const iconFrames: { width: number; height: number; data: Uint8Array }[] = [];
+  const srcW =
+    'naturalWidth' in sourceImage && (sourceImage as HTMLImageElement).naturalWidth
+      ? (sourceImage as HTMLImageElement).naturalWidth
+      : (sourceImage as HTMLCanvasElement).width || 256;
+  const srcH =
+    'naturalHeight' in sourceImage && (sourceImage as HTMLImageElement).naturalHeight
+      ? (sourceImage as HTMLImageElement).naturalHeight
+      : (sourceImage as HTMLCanvasElement).height || 256;
 
-  for (const size of sizes) {
+  const uniqueSizes = Array.from(new Set(sizes.map((s) => Math.max(16, Math.min(256, Math.round(s)))))).sort(
+    (a, b) => a - b
+  );
+
+  for (const size of uniqueSizes) {
     const c = document.createElement('canvas');
     c.width = size;
     c.height = size;
@@ -106,7 +123,13 @@ export async function canvasToIcoBlob(
     if (!ctx) continue;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(sourceImage, 0, 0, size, size);
+
+    const ratio = Math.min(size / srcW, size / srcH);
+    const drawW = Math.max(1, Math.round(srcW * ratio));
+    const drawH = Math.max(1, Math.round(srcH * ratio));
+    const dx = Math.floor((size - drawW) / 2);
+    const dy = Math.floor((size - drawH) / 2);
+    ctx.drawImage(sourceImage, dx, dy, drawW, drawH);
 
     const pngBlob = await new Promise<Blob | null>((res) => c.toBlob(res, 'image/png'));
     if (pngBlob) {
@@ -163,101 +186,86 @@ export async function canvasToIcoBlob(
 
 /**
  * Universal Image to Image Converter
+ * Supports PNG, JPG, WebP, BMP, ICO, PPM (P3/P6), GIF, SVG inputs -> PNG, JPG, WebP, BMP, ICO, PPM outputs.
  */
 export async function convertImage(
   file: File | Blob,
   options: ImageConversionOptions
 ): Promise<Blob> {
-  return new Promise(async (resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
+  const { canvas: srcCanvas, width: srcW, height: srcH } = await decodeAnyImageToCanvas(file);
 
-    img.onload = async () => {
-      try {
-        let targetW = Math.round(img.naturalWidth * options.scale);
-        let targetH = Math.round(img.naturalHeight * options.scale);
+  let targetW = Math.round(srcW * options.scale);
+  let targetH = Math.round(srcH * options.scale);
 
-        if (options.customWidth && options.customHeight) {
-          targetW = options.customWidth;
-          targetH = options.customHeight;
-        } else if (options.customWidth) {
-          const ratio = options.customWidth / img.naturalWidth;
-          targetW = options.customWidth;
-          targetH = Math.round(img.naturalHeight * ratio);
-        } else if (options.customHeight) {
-          const ratio = options.customHeight / img.naturalHeight;
-          targetH = options.customHeight;
-          targetW = Math.round(img.naturalWidth * ratio);
+  if (options.customWidth && options.customHeight) {
+    targetW = options.customWidth;
+    targetH = options.customHeight;
+  } else if (options.customWidth) {
+    const ratio = options.customWidth / srcW;
+    targetW = options.customWidth;
+    targetH = Math.round(srcH * ratio);
+  } else if (options.customHeight) {
+    const ratio = options.customHeight / srcH;
+    targetH = options.customHeight;
+    targetW = Math.round(srcW * ratio);
+  }
+
+  targetW = Math.max(1, targetW);
+  targetH = Math.max(1, targetH);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not get 2D canvas context');
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  const isOpaqueTarget =
+    options.targetFormat === 'jpg' ||
+    options.targetFormat === 'jpeg' ||
+    options.targetFormat === 'bmp' ||
+    options.targetFormat === 'ppm';
+
+  if (isOpaqueTarget || options.fillBackgroundForOpaque) {
+    ctx.fillStyle = options.backgroundColor || '#FFFFFF';
+    ctx.fillRect(0, 0, targetW, targetH);
+  }
+
+  ctx.drawImage(srcCanvas, 0, 0, targetW, targetH);
+
+  if (options.targetFormat === 'ico') {
+    return await canvasToIcoBlob(canvas, options.icoSizes || [16, 32, 48, 64, 128, 256]);
+  }
+
+  if (options.targetFormat === 'bmp') {
+    return canvasToBmpBlob(canvas);
+  }
+
+  if (options.targetFormat === 'ppm') {
+    return canvasToPpmBlob(canvas, options.ppmVariant || 'P6', options.backgroundColor || '#FFFFFF');
+  }
+
+  let mime = 'image/png';
+  if (options.targetFormat === 'jpg' || options.targetFormat === 'jpeg') {
+    mime = 'image/jpeg';
+  } else if (options.targetFormat === 'webp') {
+    mime = 'image/webp';
+  }
+
+  return await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error('Canvas export produced null blob'));
         }
-
-        targetW = Math.max(1, targetW);
-        targetH = Math.max(1, targetH);
-
-        // ICO format output
-        if (options.targetFormat === 'ico') {
-          const icoBlob = await canvasToIcoBlob(img, options.icoSizes || [16, 32, 48, 64, 128, 256]);
-          URL.revokeObjectURL(url);
-          resolve(icoBlob);
-          return;
-        }
-
-        const canvas = document.createElement('canvas');
-        canvas.width = targetW;
-        canvas.height = targetH;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('Could not get 2D canvas context');
-
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-
-        const isOpaqueTarget = options.targetFormat === 'jpg' || options.targetFormat === 'jpeg' || options.targetFormat === 'bmp';
-        if (isOpaqueTarget || options.fillBackgroundForOpaque) {
-          ctx.fillStyle = options.backgroundColor || '#FFFFFF';
-          ctx.fillRect(0, 0, targetW, targetH);
-        }
-
-        ctx.drawImage(img, 0, 0, targetW, targetH);
-
-        // BMP format output
-        if (options.targetFormat === 'bmp') {
-          const bmpBlob = canvasToBmpBlob(canvas);
-          URL.revokeObjectURL(url);
-          resolve(bmpBlob);
-          return;
-        }
-
-        // Standard PNG / JPEG / WebP
-        let mime = 'image/png';
-        if (options.targetFormat === 'jpg' || options.targetFormat === 'jpeg') {
-          mime = 'image/jpeg';
-        } else if (options.targetFormat === 'webp') {
-          mime = 'image/webp';
-        }
-
-        canvas.toBlob(
-          (blob) => {
-            URL.revokeObjectURL(url);
-            if (blob) {
-              resolve(blob);
-            } else {
-              reject(new Error('Canvas export produced null blob'));
-            }
-          },
-          mime,
-          options.quality
-        );
-      } catch (err) {
-        URL.revokeObjectURL(url);
-        reject(err);
-      }
-    };
-
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('Failed to load image for conversion'));
-    };
-
-    img.src = url;
+      },
+      mime,
+      options.quality
+    );
   });
 }
 

@@ -24,6 +24,7 @@ import { saveProcessedFile } from '../../utils/historyDb';
 import { FileItem } from '../../types';
 import { notifyCompletion } from '../../utils/notification';
 import { AddToQueuePromptModal } from '../Modals/AddToQueuePromptModal';
+import { decodeAnyImageToCanvas, createUniversalPreviewUrl } from '../../utils/imageCodecUtils';
 
 interface OcrSuiteProps {
   lang: 'ja' | 'en';
@@ -95,61 +96,54 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
     setQrScanError('');
     setQrDecodedText('');
     try {
-      let imageSourceUrl = '';
+      let baseCanvas: HTMLCanvasElement;
       if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
         const pages = await convertPdfToImages(file, { format: 'png', dpi: 150 });
         if (pages.length > 0) {
-          imageSourceUrl = URL.createObjectURL(pages[0].blob);
+          setQrScanPreview(URL.createObjectURL(pages[0].blob));
+          baseCanvas = (await decodeAnyImageToCanvas(pages[0].blob, pages[0].name)).canvas;
         } else {
           setQrScanError(lang === 'ja' ? 'PDFからページを読み込めませんでした。' : 'Could not render PDF page.');
           return;
         }
       } else {
-        imageSourceUrl = URL.createObjectURL(file);
+        const preview = await createUniversalPreviewUrl(file, file.name);
+        setQrScanPreview(preview);
+        baseCanvas = (await decodeAnyImageToCanvas(file, file.name)).canvas;
       }
 
-      setQrScanPreview(imageSourceUrl);
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
 
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
+      const scales = [1, 0.5, 1.5];
+      let foundCode: string | null = null;
 
-        // Try original scale first, then downscaled if very large
-        const scales = [1, 0.5, 1.5];
-        let foundCode: string | null = null;
-
-        for (const s of scales) {
-          canvas.width = Math.max(1, Math.floor(img.width * s));
-          canvas.height = Math.max(1, Math.floor(img.height * s));
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const code = jsQR(imageData.data, imageData.width, imageData.height, {
-            inversionAttempts: 'attemptBoth',
-          });
-          if (code && code.data) {
-            foundCode = code.data;
-            break;
-          }
+      for (const s of scales) {
+        canvas.width = Math.max(1, Math.floor(baseCanvas.width * s));
+        canvas.height = Math.max(1, Math.floor(baseCanvas.height * s));
+        ctx.drawImage(baseCanvas, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'attemptBoth',
+        });
+        if (code && code.data) {
+          foundCode = code.data;
+          break;
         }
+      }
 
-        if (foundCode) {
-          setQrDecodedText(foundCode);
-          notifyCompletion(lang === 'ja' ? 'QRコードを読み取りました' : 'QR Code Decoded', foundCode.slice(0, 50));
-          if (onShowToast) onShowToast(lang === 'ja' ? 'QRコードの読み取りに成功しました' : 'QR Code successfully decoded');
-        } else {
-          setQrScanError(
-            lang === 'ja'
-              ? '画像からQRコードが検出されませんでした。鮮明な画像を選択してください。'
-              : 'No QR code detected in this image. Please try a clearer image.'
-          );
-        }
-      };
-      img.onerror = () => {
-        setQrScanError(lang === 'ja' ? '画像の読み込みに失敗しました。' : 'Failed to load image.');
-      };
-      img.src = imageSourceUrl;
+      if (foundCode) {
+        setQrDecodedText(foundCode);
+        notifyCompletion(lang === 'ja' ? 'QRコードを読み取りました' : 'QR Code Decoded', foundCode.slice(0, 50));
+        if (onShowToast) onShowToast(lang === 'ja' ? 'QRコードの読み取りに成功しました' : 'QR Code successfully decoded');
+      } else {
+        setQrScanError(
+          lang === 'ja'
+            ? '画像からQRコードが検出されませんでした。鮮明な画像を選択してください。'
+            : 'No QR code detected in this image. Please try a clearer image.'
+        );
+      }
     } catch (err: any) {
       setQrScanError(err?.message || 'QR Scan failed');
     }
@@ -219,7 +213,7 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
     } else if (fileList.length > 0 && !ocrImage) {
       const found = fileList.find(
         (f) =>
-          ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'pdf'].includes(f.format) && f.file
+          ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'ico', 'ppm', 'pdf'].includes(f.format) && f.file
       );
       if (found && found.file) {
         setSelectedFileId(found.id);
@@ -241,8 +235,8 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
   const handleSelectOcrFile = async (file: File) => {
     setOcrImage(file);
     const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
-    if (!isPdf && (file.type.startsWith('image/') || /\.(png|jpe?g|webp|bmp|gif|svg)$/i.test(file.name))) {
-      setOcrImagePreview(URL.createObjectURL(file));
+    if (!isPdf && (file.type.startsWith('image/') || /\.(png|jpe?g|webp|bmp|gif|svg|ico|ppm)$/i.test(file.name))) {
+      createUniversalPreviewUrl(file, file.name).then((u) => setOcrImagePreview(u));
     } else {
       setOcrImagePreview('');
     }
@@ -303,29 +297,8 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
         setExtractedText(finalText);
         setIsOcrProcessing(false);
       } else {
-        // Decode image through browser native image element and canvas to ensure full format compatibility
-        const canvas = await new Promise<HTMLCanvasElement>((resolve, reject) => {
-          const img = new Image();
-          const u = URL.createObjectURL(file);
-          img.onload = () => {
-            URL.revokeObjectURL(u);
-            const c = document.createElement('canvas');
-            c.width = img.naturalWidth || img.width;
-            c.height = img.naturalHeight || img.height;
-            const ctx = c.getContext('2d');
-            if (ctx) {
-              ctx.drawImage(img, 0, 0);
-              resolve(c);
-            } else {
-              reject(new Error('Canvas context not available'));
-            }
-          };
-          img.onerror = () => {
-            URL.revokeObjectURL(u);
-            reject(new Error(lang === 'ja' ? '画像の読み込みに失敗しました' : 'Error attempting to read image.'));
-          };
-          img.src = u;
-        });
+        // Decode image (supports PPM P3/P6, ICO, BMP, PNG, JPG, WebP, SVG) via unified codec
+        const { canvas } = await decodeAnyImageToCanvas(file, file.name);
 
         // Run genuine Client-Side Tesseract.js OCR on standard canvas
         const result = await Tesseract.recognize(canvas, ocrLang, {
@@ -591,7 +564,7 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
               <input
                 ref={ocrInputRef}
                 type="file"
-                accept="image/*,application/pdf"
+                accept="image/*,.ico,.ppm,.bmp,application/pdf,image/x-icon,image/x-portable-pixmap"
                 className="hidden"
                 onChange={(e) => {
                   if (e.target.files && e.target.files[0]) {
@@ -631,8 +604,8 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
               {fileList
                 .filter(
                   (f) =>
-                    ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'pdf'].includes(f.format?.toLowerCase() || '') ||
-                    /\.(png|jpe?g|webp|bmp|pdf)$/i.test(f.name)
+                    ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'ico', 'ppm', 'pdf'].includes(f.format?.toLowerCase() || '') ||
+                    /\.(png|jpe?g|webp|bmp|ico|ppm|pdf)$/i.test(f.name)
                 )
                 .map((f) => (
                   <option key={f.id} value={f.id}>
@@ -819,8 +792,8 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
                 {fileList
                   .filter(
                     (f) =>
-                      ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'pdf'].includes(f.format?.toLowerCase() || '') ||
-                      /\.(png|jpe?g|webp|bmp|pdf)$/i.test(f.name)
+                      ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'ico', 'ppm', 'pdf'].includes(f.format?.toLowerCase() || '') ||
+                      /\.(png|jpe?g|webp|bmp|ico|ppm|pdf)$/i.test(f.name)
                   )
                   .map((f) => (
                     <option key={f.id} value={f.id}>
@@ -904,7 +877,7 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
                   <input
                     ref={qrFileInputRef}
                     type="file"
-                    accept="image/*,application/pdf"
+                    accept="image/*,.ico,.ppm,.bmp,application/pdf,image/x-icon,image/x-portable-pixmap"
                     className="hidden"
                     onChange={(e) => {
                       if (e.target.files && e.target.files[0]) {
@@ -932,7 +905,7 @@ export const OcrSuite: React.FC<OcrSuiteProps> = ({
                           {lang === 'ja' ? 'QRコードが含まれる画像またはPDFを選択' : 'Select an image or PDF containing a QR Code'}
                         </p>
                         <p className="text-[11px] text-slate-400 mt-1">
-                          {lang === 'ja' ? 'PNG, JPG, WebP, BMP, PDF 対応' : 'Supports PNG, JPG, WebP, BMP, PDF'}
+                          {lang === 'ja' ? 'PNG, JPG, WebP, BMP, ICO, PPM, PDF 対応' : 'Supports PNG, JPG, WebP, BMP, ICO, PPM, PDF'}
                         </p>
                       </>
                     )}

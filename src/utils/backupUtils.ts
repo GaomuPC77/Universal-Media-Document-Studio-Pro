@@ -6,6 +6,7 @@ import {
   savePendingFile,
   HistoryItem,
 } from './historyDb';
+import { createUniversalPreviewUrl } from './imageCodecUtils';
 
 export interface BackupManifest {
   version: string;
@@ -222,8 +223,8 @@ export async function importWorkspaceBackup(backupFile: File): Promise<{
         }
       }
 
-      const previewUrl = ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif', 'ico'].includes(pf.format)
-        ? URL.createObjectURL(fileObj)
+      const previewUrl = ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif', 'ico', 'ppm'].includes(pf.format)
+        ? await createUniversalPreviewUrl(fileObj, pf.format)
         : undefined;
 
       restoredFiles.push({

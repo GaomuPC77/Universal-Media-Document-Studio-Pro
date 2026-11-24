@@ -3,6 +3,9 @@
  * vector element editing, batch color replacement, and raster export utilities.
  */
 
+import { canvasToBmpBlob, canvasToIcoBlob } from './formatConversionUtils';
+import { canvasToPpmBlob } from './imageCodecUtils';
+
 export interface SvgElementInfo {
   path: string;
   tagName: string;
@@ -890,7 +893,7 @@ export function minifySvgMarkup(rawSvg: string): string {
 
 export async function exportSvgToRasterBlob(
   rawSvg: string,
-  format: 'png' | 'jpg' | 'webp',
+  format: 'png' | 'jpg' | 'webp' | 'bmp' | 'ico' | 'ppm',
   scale: number = 2,
   bgMode: 'transparent' | 'white' | 'dark' = 'transparent'
 ): Promise<{ blob: Blob; width: number; height: number }> {
@@ -925,7 +928,8 @@ export async function exportSvgToRasterBlob(
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D context unavailable');
 
-    if (format === 'jpg' || bgMode === 'white') {
+    const needsOpaqueBg = format === 'jpg' || format === 'bmp' || format === 'ppm';
+    if (needsOpaqueBg || bgMode === 'white') {
       ctx.fillStyle = bgMode === 'dark' ? '#0f172a' : '#ffffff';
       ctx.fillRect(0, 0, outW, outH);
     } else if (bgMode === 'dark') {
@@ -934,6 +938,18 @@ export async function exportSvgToRasterBlob(
     }
 
     ctx.drawImage(img, 0, 0, outW, outH);
+
+    if (format === 'bmp') {
+      return { blob: canvasToBmpBlob(canvas), width: outW, height: outH };
+    }
+    if (format === 'ico') {
+      const icoBlob = await canvasToIcoBlob(canvas, [16, 32, 48, 64, 128, 256]);
+      return { blob: icoBlob, width: outW, height: outH };
+    }
+    if (format === 'ppm') {
+      const bgHex = bgMode === 'dark' ? '#0f172a' : '#ffffff';
+      return { blob: canvasToPpmBlob(canvas, 'P6', bgHex), width: outW, height: outH };
+    }
 
     const mime =
       format === 'jpg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png';

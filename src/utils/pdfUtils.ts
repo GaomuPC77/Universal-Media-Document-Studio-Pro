@@ -8,6 +8,8 @@ import {
   PdfTextBoxAnnotation,
   PdfMarkupAnnotation,
 } from '../types';
+import { canvasToBmpBlob, canvasToIcoBlob } from './formatConversionUtils';
+import { canvasToPpmBlob, decodeAnyImageToCanvas } from './imageCodecUtils';
 
 // Set up pdf.js worker and cMap support
 try {
@@ -201,7 +203,7 @@ export async function extractPdfTableRows(file: File | ArrayBuffer | Blob): Prom
 export async function convertPdfToImages(
   file: File | ArrayBuffer | Blob,
   options: {
-    format: 'png' | 'jpg' | 'webp';
+    format: 'png' | 'jpg' | 'webp' | 'bmp' | 'ico' | 'ppm';
     dpi?: number;
     pages?: number[];
     quality?: number;
@@ -240,14 +242,23 @@ export async function convertPdfToImages(
       canvas: canvas,
     }).promise;
 
-    const mimeType = options.format === 'jpg' ? 'image/jpeg' : `image/${options.format}`;
-    const blob: Blob = await new Promise((resolve) => {
-      canvas.toBlob(
-        (b) => resolve(b || new Blob()),
-        mimeType,
-        options.quality || 0.92
-      );
-    });
+    let blob: Blob;
+    if (options.format === 'bmp') {
+      blob = canvasToBmpBlob(canvas);
+    } else if (options.format === 'ico') {
+      blob = await canvasToIcoBlob(canvas, [16, 32, 48, 64, 128, 256]);
+    } else if (options.format === 'ppm') {
+      blob = canvasToPpmBlob(canvas, 'P6', '#FFFFFF');
+    } else {
+      const mimeType = options.format === 'jpg' ? 'image/jpeg' : `image/${options.format}`;
+      blob = await new Promise<Blob>((resolve) => {
+        canvas.toBlob(
+          (b) => resolve(b || new Blob()),
+          mimeType,
+          options.quality || 0.92
+        );
+      });
+    }
 
     results.push({
       name: `page_${pageNum}.${options.format}`,
@@ -876,11 +887,26 @@ export async function imagesToPdf(
   const margin = options?.margin !== undefined ? options.margin : 20;
 
   for (const img of images) {
+    const lowerName = (img.name || '').toLowerCase();
+    const lowerType = (img.type || '').toLowerCase();
+    const bytes = new Uint8Array(img.data);
+    const isNativePng =
+      bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+    const isNativeJpg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+
     let embeddedImg;
-    if (img.type.includes('png')) {
+    if (isNativePng) {
       embeddedImg = await pdfDoc.embedPng(img.data);
-    } else {
+    } else if (isNativeJpg) {
       embeddedImg = await pdfDoc.embedJpg(img.data);
+    } else {
+      // Decode PPM, BMP, ICO, WebP, SVG, GIF via unified codec and transcode cleanly to PNG
+      const srcBlob = new Blob([img.data], { type: lowerType || 'application/octet-stream' });
+      const { canvas } = await decodeAnyImageToCanvas(srcBlob, lowerName);
+      const pngBlob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG transcode failed'))), 'image/png');
+      });
+      embeddedImg = await pdfDoc.embedPng(await pngBlob.arrayBuffer());
     }
 
     const imgDims = embeddedImg.scale(1.0);

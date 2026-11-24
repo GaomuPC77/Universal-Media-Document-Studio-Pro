@@ -43,6 +43,7 @@ import {
   isUnauthorizedDomainError,
 } from './utils/googleDrive';
 import { savePendingFile, getPendingFiles } from './utils/historyDb';
+import { createUniversalPreviewUrl } from './utils/imageCodecUtils';
 import { FileItem, DocumentFormat } from './types';
 import {
   UploadCloud,
@@ -142,26 +143,27 @@ export default function App() {
     }
 
     // Restore pending files & session across reloads
-    getPendingFiles().then((stored) => {
+    getPendingFiles().then(async (stored) => {
       if (stored && stored.length > 0) {
-        const reconstructed: FileItem[] = stored.map((item) => {
-          const fileObj = new File([item.data], item.name, { type: item.type || 'application/octet-stream' });
-          const format = (item.format || getFormatFromExt(item.name)) as DocumentFormat;
-          return {
-            id: item.id,
-            name: item.name,
-            size: item.size,
-            type: item.type,
-            format,
-            targetFormat: (item.targetFormat || (format === 'pdf' ? 'docx' : 'pdf')) as DocumentFormat,
-            status: 'idle',
-            progress: 0,
-            file: fileObj,
-            previewUrl: ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif', 'ico'].includes(format)
-              ? URL.createObjectURL(fileObj)
-              : undefined,
-          };
-        });
+        const reconstructed: FileItem[] = await Promise.all(
+          stored.map(async (item) => {
+            const fileObj = new File([item.data], item.name, { type: item.type || 'application/octet-stream' });
+            const format = (item.format || getFormatFromExt(item.name)) as DocumentFormat;
+            const isImg = ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif', 'ico', 'ppm'].includes(format);
+            return {
+              id: item.id,
+              name: item.name,
+              size: item.size,
+              type: item.type,
+              format,
+              targetFormat: (item.targetFormat || (format === 'pdf' ? 'docx' : 'pdf')) as DocumentFormat,
+              status: 'idle',
+              progress: 0,
+              file: fileObj,
+              previewUrl: isImg ? await createUniversalPreviewUrl(fileObj, format) : undefined,
+            };
+          })
+        );
         setFileList(reconstructed);
         if (reconstructed.length > 0) {
           setActiveSharedFile(reconstructed[0].file);
@@ -342,7 +344,10 @@ export default function App() {
   // Helper to detect format from file extension
   const getFormatFromExt = (fileName: string): DocumentFormat => {
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
-    if (['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'ico', 'gif', 'mp4', 'webm', 'mov', 'mp3', 'wav', 'm4a', 'aac', 'ogg'].includes(ext)) {
+    if (['pnm', 'pgm', 'pbm'].includes(ext)) {
+      return 'ppm';
+    }
+    if (['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'ico', 'ppm', 'gif', 'mp4', 'webm', 'mov', 'mp3', 'wav', 'm4a', 'aac', 'ogg'].includes(ext)) {
       return ext as DocumentFormat;
     }
     if (['pdf', 'docx', 'xlsx', 'xls', 'csv', 'tsv', 'txt', 'md', 'html', 'json', 'xml', 'rtf', 'zip'].includes(ext)) {
@@ -361,6 +366,8 @@ export default function App() {
       const format = getFormatFromExt(file.name);
       const targetFormat = format === 'pdf' ? 'docx' : 'pdf';
       const id = `file_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+      const isImg = ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif', 'ico', 'ppm'].includes(format);
+      const previewUrl = isImg ? await createUniversalPreviewUrl(file, format) : undefined;
       newItems.push({
         id,
         name: file.name,
@@ -371,9 +378,7 @@ export default function App() {
         status: 'idle',
         progress: 0,
         file,
-        previewUrl: ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif', 'ico'].includes(format)
-          ? URL.createObjectURL(file)
-          : undefined,
+        previewUrl,
       });
 
       // Persist pending file to IndexedDB for session recovery
@@ -857,8 +862,8 @@ export default function App() {
               <h4 className="break-keep">{lang === 'ja' ? 'PDF ⇔ Office変換 ＆ データ表・画像・SVG編集スタジオ' : 'PDF ⇔ Office, Data Tables, Image & SVG Studio'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'PDFとWord・Excel・PowerPointの相互変換やデータ表（CSV/TSV/XLSX/JSON/HTML/MD）変換に対応。画像加工・形式変換（PNG/JPG/WebP/BMP/ICO/SVG）に加え、専用の「SVG編集・作成」タブでベクター図形・パス・テキスト追加、パーツごとの頂点・制御点移動や中間頂点の追加/削除、色一括置換、レイヤー操作、ViewBox自動調整、SVGコード整形/軽量化および高解像度ラスタ書き出しが行えます（各エディタでCtrl+Z/Ctrl+Y対応）。'
-                  : 'Convert between PDF and Word/Excel/PowerPoint or transform data tables. Edit raster images (PNG/JPG/WebP/BMP/ICO/SVG), plus use SVG Studio to draw shapes/paths/text, move individual vertices and Bézier control handles per part, insert/delete nodes, batch-replace colors, manage layers, adjust viewBox, format/minify markup, and export scaled PNG/JPG/WebP (Ctrl+Z / Ctrl+Y supported across editors).'}
+                  ? 'PDFとWord・Excel・PowerPointの相互変換やデータ表（CSV/TSV/XLSX/JSON/HTML/MD）変換に対応。画像加工・一括相互変換（PNG/JPG/WebP/BMP/マルチICO/PPM P3・P6/SVG）やPDFとの相互変換に加え、専用の「SVG編集・作成」タブでベクター図形・パス・テキスト追加、パーツごとの頂点・制御点移動や中間頂点の追加/削除、色一括置換、レイヤー操作、ViewBox自動調整、SVGコード整形/軽量化および高解像度ラスタ書き出しが行えます（Ctrl+Z/Ctrl+Y対応）。'
+                  : 'Convert between PDF and Word/Excel/PowerPoint or transform data tables. Edit and batch-convert raster images (PNG/JPG/WebP/BMP/multi-res ICO/PPM P3 & P6/SVG) or PDF⇔Image, plus use SVG Studio to draw shapes/paths/text, move vertices and Bézier control handles per part, insert/delete nodes, batch-replace colors, manage layers, adjust viewBox, format/minify markup, and export scaled PNG/JPG/WebP/BMP/ICO/PPM (Ctrl+Z / Ctrl+Y supported).'}
               </p>
             </div>
             <div className="info-sub-box">
@@ -881,8 +886,8 @@ export default function App() {
               <h4 className="break-keep">{lang === 'ja' ? '全メタデータ・C2PA確認・編集・リスク可視化' : 'Full Metadata & C2PA Editor + Risk Guide'}</h4>
               <p>
                 {lang === 'ja'
-                  ? 'EXIF/GPS/PNGチャンク/PDF辞書・XMP/Officeプロパティ/MP4・MOV・M4AメタデータやC2PA署名情報を単体・複数ファイルで検査し、ファイル名・名前上の拡張子・日時・位置情報を含む全検出項目を直接編集または削除できます。各項目の「設定内容」と「変更時のリスク」もあわせて表示します。'
-                  : 'Inspect, inline-edit, or scrub filenames, extensions, timestamps, GPS, C2PA Content Credentials, and all detected EXIF/PNG/PDF/Office/XMP/MP4 tags on single or multiple files—with plain-language descriptions and modification risk warnings for every field.'}
+                  ? 'EXIF/GPS/PNGチャンク/BMP・ICO・PPMヘッダ/PDF辞書・XMP/Officeプロパティ/MP4・MOV・M4AメタデータやC2PA署名情報を単体・複数ファイルで検査し、ファイル名・名前上の拡張子・日時・位置情報を含む検出項目を直接編集または削除できます。各項目の「設定内容」と「変更時のリスク」もあわせて表示します。'
+                  : 'Inspect, inline-edit, or scrub filenames, extensions, timestamps, GPS, C2PA Content Credentials, and detected EXIF/PNG/BMP/ICO/PPM/PDF/Office/XMP/MP4 tags on single or multiple files—with plain-language descriptions and modification risk warnings for every field.'}
               </p>
             </div>
             <div className="info-sub-box">
@@ -910,15 +915,15 @@ export default function App() {
             <span>
               <strong>{lang === 'ja' ? '入力形式: ' : 'Input: '}</strong>
               {lang === 'ja'
-                ? 'PDF, Word (DOCX), Excel (XLSX, XLS), PowerPoint (PPTX), CSV, TSV, JSON, XML, HTML, Markdown (MD), テキスト (TXT), 画像 (PNG, JPG, WebP, BMP, SVG, ICO, GIF), ZIP ／ メタデータ解析・プレビュー対応: MP4, MOV, M4A, WebM, MP3, WAV'
-                : 'PDF, Word (DOCX), Excel (XLSX, XLS), PowerPoint (PPTX), CSV, TSV, JSON, XML, HTML, Markdown (MD), Plain Text (TXT), Images (PNG, JPG, WebP, BMP, SVG, ICO, GIF), ZIP / Metadata & Preview: MP4, MOV, M4A, WebM, MP3, WAV'}
+                ? 'PDF, Word (DOCX), Excel (XLSX, XLS), PowerPoint (PPTX), CSV, TSV, JSON, XML, HTML, Markdown (MD), テキスト (TXT), 画像 (PNG, JPG, WebP, BMP, ICO, PPM [P3/P6], SVG, GIF), ZIP ／ メタデータ解析・プレビュー対応: MP4, MOV, M4A, WebM, MP3, WAV'
+                : 'PDF, Word (DOCX), Excel (XLSX, XLS), PowerPoint (PPTX), CSV, TSV, JSON, XML, HTML, Markdown (MD), Plain Text (TXT), Images (PNG, JPG, WebP, BMP, ICO, PPM [P3/P6], SVG, GIF), ZIP / Metadata & Preview: MP4, MOV, M4A, WebM, MP3, WAV'}
             </span>
             <br />
             <span>
               <strong>{lang === 'ja' ? '出力形式: ' : 'Output: '}</strong>
               {lang === 'ja'
-                ? 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), テキスト (TXT), 画像 (PNG, JPG, WebP, BMP, ICO, SVG), ZIP, メタデータ編集／削除済みオリジナル形式ファイル'
-                : 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), Plain Text (TXT), Images (PNG, JPG, WebP, BMP, ICO, SVG), ZIP, and metadata-edited or scrubbed original files'}
+                ? 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), テキスト (TXT), 画像 (PNG, JPG, WebP, BMP, マルチ解像度ICO, PPM [P6/P3], SVG), ZIP, メタデータ編集／削除済みオリジナル形式ファイル'
+                : 'PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), CSV, TSV, JSON, HTML, Markdown (MD), Plain Text (TXT), Images (PNG, JPG, WebP, BMP, multi-res ICO, PPM [P6/P3], SVG), ZIP, and metadata-edited or scrubbed original files'}
             </span>
             <br />
             <span>
@@ -1058,8 +1063,20 @@ export default function App() {
             </summary>
             <div className="faq-content">
               {lang === 'ja'
-                ? 'はい。「SVG編集・作成」タブでSVGのベクター図形やテキストの選択・ドラッグ移動、「頂点編集」ツール（またはパーツのダブルクリック）によるパス/多角形/直線/四角形/円・楕円ごとの頂点・ベジェ制御点の移動・中間点追加・削除・座標数値編集、新規図形（四角形・円/楕円・直線・ペンパス・文字）追加、塗り/線色/線幅/不透明度/角丸調整、使用カラーの一括置換、レイヤー順変更、ViewBoxサイズ調整・自動フィット、SVGソースコードの整形・軽量化、およびSVG/PNG/JPG/WebP（1x〜4x倍率）書き出しまで端末内完結で行えます。Ctrl+Z（元に戻す）・Ctrl+Y（やり直し）のショートカットにも対応し、不要なスクリプト属性は自動サニタイズされます。'
-                : 'Yes. The SVG Studio tab supports selecting and dragging vector elements, per-part vertex & Bézier control handle dragging (plus midpoint insertion, node deletion, and numeric coordinates via Edit Nodes or double-clicking a shape), adding shapes/paths/text, editing fill/stroke/opacity/radius, batch-replacing colors, managing layers, fitting/editing viewBox, formatting or minifying markup, Ctrl+Z / Ctrl+Y shortcuts, and exporting SVG or 1x–4x PNG/JPG/WebP locally with automatic script sanitization.'}
+                ? 'はい。「SVG編集・作成」タブでSVGのベクター図形やテキストの選択・ドラッグ移動、「頂点編集」ツール（またはパーツのダブルクリック）によるパス/多角形/直線/四角形/円・楕円ごとの頂点・ベジェ制御点の移動・中間点追加・削除・座標数値編集、新規図形（四角形・円/楕円・直線・ペンパス・文字）追加、塗り/線色/線幅/不透明度/角丸調整、使用カラーの一括置換、レイヤー順変更、ViewBoxサイズ調整・自動フィット、SVGソースコードの整形・軽量化、およびSVG/PNG/JPG/WebP/BMP/ICO/PPM（1x〜4x倍率）書き出しまで端末内完結で行えます。Ctrl+Z（元に戻す）・Ctrl+Y（やり直し）のショートカットにも対応し、不要なスクリプト属性は自動サニタイズされます。'
+                : 'Yes. The SVG Studio tab supports selecting and dragging vector elements, per-part vertex & Bézier control handle dragging (plus midpoint insertion, node deletion, and numeric coordinates via Edit Nodes or double-clicking a shape), adding shapes/paths/text, editing fill/stroke/opacity/radius, batch-replacing colors, managing layers, fitting/editing viewBox, formatting or minifying markup, Ctrl+Z / Ctrl+Y shortcuts, and exporting SVG or 1x–4x PNG/JPG/WebP/BMP/ICO/PPM locally with automatic script sanitization.'}
+            </div>
+          </details>
+
+          <details className="faq-details">
+            <summary className="faq-summary">
+              <span>{lang === 'ja' ? 'Q9: ICO・PPM（P3/P6）・BMP画像の読み込み、変換、メタデータ確認はできますか？' : 'Q9: Can I open, edit, convert, and inspect ICO, PPM (P3/P6), and BMP images?'}</span>
+              <span>▼</span>
+            </summary>
+            <div className="faq-content">
+              {lang === 'ja'
+                ? 'はい。独自のクライアントサイドデコーダ＆エンコーダを内蔵しており、標準ブラウザが直接表示できない PPM（P3 ASCII / P6 Binary）やマルチ解像度ICO、1〜32bit BMP のサムネイル表示、画像加工、一括相互変換、PDF ⇔ 画像変換、OCR・QRスキャン、および構造ヘッダ／PPMコメント行の確認・編集までブラウザ内のみで完結できます。ICO出力時は複数サイズ（16〜256px）を1ファイルに格納でき、PPMはP6（バイナリ）とP3（ASCII）を切り替えられます。'
+                : 'Yes. Built-in client-side decoders and encoders enable full thumbnail preview, canvas editing, batch mutual conversion, PDF ⇔ Image conversion, OCR/QR scanning, and structural header / PPM comment inspection for PPM (P3 ASCII & P6 Binary), multi-resolution ICO, and 1–32bit BMP completely inside your browser.'}
             </div>
           </details>
         </div>

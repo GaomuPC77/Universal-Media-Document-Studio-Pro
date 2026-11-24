@@ -6,6 +6,7 @@ import { parseSpreadsheet } from '../../utils/officeUtils';
 import { inspectZip, ZipEntryInfo } from '../../utils/zipUtils';
 import { extractPdfText } from '../../utils/pdfUtils';
 import { parseMarkdownToHtml } from '../../utils/markdownUtils';
+import { createUniversalPreviewUrl } from '../../utils/imageCodecUtils';
 
 interface FilePreviewModalProps {
   item: FileItem | null;
@@ -50,8 +51,11 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
           return;
         }
 
-        // Create blob url for media / sandbox
-        const url = URL.createObjectURL(targetBlob);
+        // Create blob url (or decoded PNG object URL for PPM / multi-res ICO)
+        const isRasterPreview = ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif', 'ico', 'ppm'].includes(ext);
+        const url = isRasterPreview
+          ? await createUniversalPreviewUrl(targetBlob, item.name)
+          : URL.createObjectURL(targetBlob);
         if (isMounted) setMediaBlobUrl(url);
 
         if (ext === 'html' || ext === 'htm') {
@@ -124,7 +128,7 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({ item, onClos
   if (!item) return null;
 
   const ext = item.name.split('.').pop()?.toLowerCase() || '';
-  const isImage = ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif', 'ico'].includes(ext);
+  const isImage = ['png', 'jpg', 'jpeg', 'webp', 'svg', 'bmp', 'gif', 'ico', 'ppm'].includes(ext);
   const isAudio = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac'].includes(ext);
   const isVideo = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'flv', 'wmv'].includes(ext);
   const isPdf = ext === 'pdf';

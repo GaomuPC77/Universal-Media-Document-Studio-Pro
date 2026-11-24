@@ -204,7 +204,7 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
       return true;
     }
     const ext = f.name.includes('.') ? f.name.split('.').pop()?.toLowerCase() || '' : '';
-    const knownExts = ['pdf','docx','doc','xlsx','xls','pptx','ppt','csv','tsv','txt','md','html','json','xml','png','jpg','jpeg','webp','svg','gif','bmp','ico','mp4','webm','mov','mp3','wav','m4a','aac','ogg','zip','rar','7z'];
+    const knownExts = ['pdf','docx','doc','xlsx','xls','pptx','ppt','csv','tsv','txt','md','html','json','xml','png','jpg','jpeg','webp','svg','gif','bmp','ico','ppm','mp4','webm','mov','mp3','wav','m4a','aac','ogg','zip','rar','7z'];
     if (!ext || !knownExts.includes(ext)) {
       if (!ext && f.mimeType.includes('google')) return true;
     }

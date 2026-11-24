@@ -21,6 +21,7 @@ export type DocumentFormat =
   | 'svg'
   | 'bmp'
   | 'ico'
+  | 'ppm'
   | 'gif'
   | 'zip';
 

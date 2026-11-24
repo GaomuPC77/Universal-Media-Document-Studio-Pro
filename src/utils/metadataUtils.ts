@@ -1,5 +1,11 @@
 import JSZip from 'jszip';
 import { PDFDocument, PDFName, PDFString } from 'pdf-lib';
+import {
+  isNetpbmBytes,
+  parsePpmHeader,
+  inspectBmpHeader,
+  inspectIcoHeader,
+} from './imageCodecUtils';
 
 export interface MetadataTagItem {
   id: string;
@@ -352,6 +358,9 @@ export async function detectMagicFormat(bytes: Uint8Array, fileName: string): Pr
   }
 
   // Text-based inspection
+  if (isNetpbmBytes(bytes)) {
+    return { format: 'ppm', mime: 'image/x-portable-pixmap' };
+  }
   const sample = readUtf8(bytes.subarray(0, Math.min(bytes.length, 4096))).trimStart();
   const extLower = splitFileName(fileName).extension.toLowerCase();
   if (sample.startsWith('<svg') || (sample.startsWith('<?xml') && sample.includes('<svg'))) {
@@ -377,6 +386,10 @@ export async function detectMagicFormat(bytes: Uint8Array, fileName: string): Pr
       htm: 'text/html',
       svg: 'image/svg+xml',
       xml: 'application/xml',
+      ppm: 'image/x-portable-pixmap',
+      pnm: 'image/x-portable-anymap',
+      bmp: 'image/bmp',
+      ico: 'image/x-icon',
     };
     return { format: extLower === 'htm' ? 'html' : extLower, mime: map[extLower] || 'application/octet-stream' };
   }
@@ -391,6 +404,9 @@ export function isExtensionCompatible(nameExt: string, detectedFormat: string): 
   if (n === d) return true;
   if ((n === 'jpeg' || n === 'jpg' || n === 'jpe') && d === 'jpg') return true;
   if ((n === 'tif' || n === 'tiff') && d === 'tiff') return true;
+  if ((n === 'ppm' || n === 'pnm' || n === 'pgm' || n === 'pbm') && d === 'ppm') return true;
+  if ((n === 'bmp' || n === 'dib') && d === 'bmp') return true;
+  if ((n === 'ico' || n === 'cur') && d === 'ico') return true;
   if ((n === 'htm' || n === 'html') && d === 'html') return true;
   if ((n === 'md' || n === 'markdown') && (d === 'md' || d === 'txt')) return true;
   if (['csv', 'tsv', 'txt', 'md', 'json', 'log'].includes(n) && ['csv', 'tsv', 'txt', 'md', 'json'].includes(d)) {
@@ -1335,10 +1351,10 @@ export async function inspectFileMetadata(file: File): Promise<InspectedMetadata
     capabilities: {
       canEditExif: ['jpg', 'png', 'webp'].includes(detectedFormat),
       canEditGps: ['jpg', 'png', 'webp'].includes(detectedFormat),
-      canEditDocMeta: ['jpg', 'png', 'webp', 'pdf', 'docx', 'xlsx', 'pptx', 'html', 'svg'].includes(detectedFormat),
+      canEditDocMeta: ['jpg', 'png', 'webp', 'pdf', 'docx', 'xlsx', 'pptx', 'html', 'svg', 'ppm'].includes(detectedFormat),
       canEditEmbeddedDates: ['jpg', 'png', 'webp', 'pdf', 'docx', 'xlsx', 'pptx', 'mp4', 'mov', 'm4a'].includes(detectedFormat),
       canStripC2pa: ['jpg', 'png', 'webp', 'pdf', 'mp4', 'mov', 'm4a', 'svg', 'html'].includes(detectedFormat),
-      canStripAllMeta: ['jpg', 'png', 'webp', 'pdf', 'docx', 'xlsx', 'pptx', 'mp4', 'mov', 'm4a', 'svg', 'html'].includes(detectedFormat),
+      canStripAllMeta: ['jpg', 'png', 'webp', 'pdf', 'docx', 'xlsx', 'pptx', 'mp4', 'mov', 'm4a', 'svg', 'html', 'ppm'].includes(detectedFormat),
     },
   };
 
@@ -1378,6 +1394,12 @@ export async function inspectFileMetadata(file: File): Promise<InspectedMetadata
       await inspectPng(bytes, result);
     } else if (detectedFormat === 'webp') {
       await inspectWebp(bytes, result);
+    } else if (detectedFormat === 'bmp') {
+      inspectBmp(bytes, result);
+    } else if (detectedFormat === 'ico') {
+      inspectIco(bytes, result);
+    } else if (detectedFormat === 'ppm') {
+      inspectPpm(bytes, result);
     } else if (detectedFormat === 'tiff') {
       const exif = parseExifTiffBytes(bytes);
       mergeParsedExif(exif, result, 'TIFF');
@@ -1395,6 +1417,128 @@ export async function inspectFileMetadata(file: File): Promise<InspectedMetadata
   }
 
   return result;
+}
+
+function inspectBmp(bytes: Uint8Array, result: InspectedMetadata) {
+  const info = inspectBmpHeader(bytes);
+  if (!info) return;
+  const compNames: Record<number, string> = {
+    0: 'BI_RGB (Uncompressed)',
+    1: 'BI_RLE8',
+    2: 'BI_RLE4',
+    3: 'BI_BITFIELDS',
+  };
+  result.tags.push(
+    {
+      id: 'bmp_dims',
+      group: 'File',
+      key: 'BMP Dimensions',
+      value: `${info.width} × ${info.height} px (${info.topDown ? 'Top-Down' : 'Bottom-Up'})`,
+      editable: false,
+      readOnlyReason: 'raster_header',
+    },
+    {
+      id: 'bmp_depth',
+      group: 'File',
+      key: 'BMP Color Depth',
+      value: `${info.bitCount}-bit (${compNames[info.compression] || `Compression ${info.compression}`})`,
+      editable: false,
+      readOnlyReason: 'raster_header',
+    }
+  );
+  if (info.xPelsPerMeter > 0 || info.yPelsPerMeter > 0) {
+    const dpiX = Math.round(info.xPelsPerMeter / 39.3701);
+    const dpiY = Math.round(info.yPelsPerMeter / 39.3701);
+    result.tags.push({
+      id: 'bmp_dpi',
+      group: 'File',
+      key: 'BMP Print Resolution',
+      value: `${dpiX} × ${dpiY} DPI (${info.xPelsPerMeter} × ${info.yPelsPerMeter} px/m)`,
+      editable: false,
+      readOnlyReason: 'raster_header',
+    });
+  }
+}
+
+function inspectIco(bytes: Uint8Array, result: InspectedMetadata) {
+  const info = inspectIcoHeader(bytes);
+  if (!info) return;
+  const frameLabels = info.entries.map(
+    (e) => `${e.width}×${e.height} (${e.isPng ? 'PNG' : `${e.bitCount || 32}-bit DIB`})`
+  );
+  result.tags.push(
+    {
+      id: 'ico_type',
+      group: 'File',
+      key: 'Icon Container',
+      value: `${info.type.toUpperCase()} (${info.entries.length} frames)`,
+      editable: false,
+      readOnlyReason: 'raster_header',
+    },
+    {
+      id: 'ico_frames',
+      group: 'File',
+      key: 'ICO Directory Frames',
+      value: frameLabels.join(', '),
+      editable: false,
+      readOnlyReason: 'raster_header',
+    }
+  );
+}
+
+function inspectPpm(bytes: Uint8Array, result: InspectedMetadata) {
+  const info = parsePpmHeader(bytes);
+  if (!info) return;
+  const variantLabel =
+    info.magic === 'P6'
+      ? 'P6 (Binary RGB)'
+      : info.magic === 'P3'
+      ? 'P3 (ASCII RGB)'
+      : info.magic === 'P5'
+      ? 'P5 (Binary Grayscale)'
+      : info.magic === 'P2'
+      ? 'P2 (ASCII Grayscale)'
+      : `${info.magic} (Netpbm Bitmap)`;
+  result.tags.push(
+    {
+      id: 'ppm_magic',
+      group: 'File',
+      key: 'Netpbm Format Variant',
+      value: variantLabel,
+      editable: false,
+      readOnlyReason: 'raster_header',
+    },
+    {
+      id: 'ppm_dims',
+      group: 'File',
+      key: 'PPM Dimensions',
+      value: `${info.width} × ${info.height} px`,
+      editable: false,
+      readOnlyReason: 'raster_header',
+    },
+    {
+      id: 'ppm_maxval',
+      group: 'File',
+      key: 'PPM Max Sample Value',
+      value: String(info.maxval),
+      editable: false,
+      readOnlyReason: 'raster_header',
+    }
+  );
+  if (info.comments.length > 0) {
+    result.documentMeta.description = info.comments.join(' / ');
+    info.comments.forEach((comment, idx) => {
+      result.tags.push({
+        id: `ppm_comment_${idx}`,
+        group: 'File',
+        key: `PPM Header Comment #${idx + 1}`,
+        value: comment,
+        rawValue: comment,
+        editable: true,
+        deletable: true,
+      });
+    });
+  }
 }
 
 function mergeParsedExif(exif: ParsedExifData, result: InspectedMetadata, sourceLabel: string) {
@@ -2126,6 +2270,8 @@ export async function applyMetadataChanges(
     bytes = editIsoBmffBytes(bytes, inspected, opts, changesApplied);
   } else if (['html', 'svg', 'xml'].includes(fmt)) {
     bytes = editTextMarkupBytes(bytes, inspected, opts, changesApplied);
+  } else if (fmt === 'ppm') {
+    bytes = editPpmBytes(bytes, inspected, opts, changesApplied);
   }
 
   const outMime = file.type || inspected.detectedMime || 'application/octet-stream';
@@ -3349,6 +3495,43 @@ function editTextMarkupBytes(bytes: Uint8Array, inspected: InspectedMetadata, op
 
   recordEditSummaries(opts, changesApplied);
   return encodeUtf8(text);
+}
+
+function editPpmBytes(bytes: Uint8Array, inspected: InspectedMetadata, opts: MetadataEditOptions, changesApplied: string[]): Uint8Array {
+  const header = parsePpmHeader(bytes);
+  if (!header) return bytes;
+
+  const ed = opts.editedTags || {};
+  const del = opts.deletedTagIds || new Set<string>();
+  const newComments: string[] = [];
+
+  if (!opts.scrubAllMetadata && opts.docMetaAction !== 'delete') {
+    header.comments.forEach((c, idx) => {
+      const id = `ppm_comment_${idx}`;
+      if (del.has(id)) return;
+      const updated = Object.prototype.hasOwnProperty.call(ed, id) ? ed[id] : c;
+      const sanitized = updated.replace(/[\r\n]+/g, ' ').trim();
+      if (sanitized) newComments.push(sanitized);
+    });
+    if (opts.docMetaAction === 'set' && opts.newDocMeta?.description) {
+      const desc = opts.newDocMeta.description.replace(/[\r\n]+/g, ' ').trim();
+      if (desc && !newComments.includes(desc)) newComments.push(desc);
+    }
+  }
+
+  const lines: string[] = [header.magic];
+  for (const comment of newComments) {
+    lines.push(`# ${comment}`);
+  }
+  lines.push(`${header.width} ${header.height}`);
+  if (header.magic !== 'P1' && header.magic !== 'P4') {
+    lines.push(String(header.maxval));
+  }
+  const headerBytes = encodeUtf8(`${lines.join('\n')}\n`);
+  const payload = bytes.subarray(header.dataOffset);
+
+  recordEditSummaries(opts, changesApplied);
+  return concatChunks([headerBytes, payload]);
 }
 
 function concatChunks(chunks: Uint8Array[]): Uint8Array {

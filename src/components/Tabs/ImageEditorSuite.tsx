@@ -23,12 +23,22 @@ import {
   Image as ImageIcon,
   Layers,
   FolderOpen,
+  ArrowLeftRight,
+  FolderArchive,
 } from 'lucide-react';
 import { FileItem, DocumentFormat } from '../../types';
 import { saveProcessedFile } from '../../utils/historyDb';
 import { notifyCompletion } from '../../utils/notification';
 import { AddToQueuePromptModal } from '../Modals/AddToQueuePromptModal';
-import { canvasToBmpBlob, canvasToIcoBlob } from '../../utils/formatConversionUtils';
+import {
+  canvasToBmpBlob,
+  canvasToIcoBlob,
+  canvasToPpmBlob,
+  convertImage,
+  ImageTargetFormat,
+} from '../../utils/formatConversionUtils';
+import { decodeAnyImageToCanvas, createUniversalPreviewUrl } from '../../utils/imageCodecUtils';
+import { createZipArchive } from '../../utils/zipUtils';
 
 interface ImageEditorSuiteProps {
   lang: 'ja' | 'en';
@@ -40,7 +50,7 @@ interface ImageEditorSuiteProps {
   onOpenInSvgStudio?: (file: File) => void;
 }
 
-type EditorTool = 'adjust' | 'filter' | 'crop' | 'mosaic' | 'markup' | 'text';
+type EditorTool = 'adjust' | 'filter' | 'crop' | 'mosaic' | 'markup' | 'text' | 'batch';
 type MarkupShape = 'pen' | 'highlighter' | 'arrow' | 'rect' | 'circle';
 
 interface FilterAdjustments {
@@ -139,54 +149,85 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
   const [textPos, setTextPos] = useState<{ x: number; y: number }>({ x: 0.5, y: 0.5 });
 
   // Export Format
-  const [exportFormat, setExportFormat] = useState<'png' | 'jpg' | 'webp' | 'bmp' | 'ico' | 'svg'>('png');
+  const [exportFormat, setExportFormat] = useState<'png' | 'jpg' | 'webp' | 'bmp' | 'ico' | 'ppm' | 'svg'>('png');
+  const [ppmVariant, setPpmVariant] = useState<'P6' | 'P3'>('P6');
+  const [icoSizes, setIcoSizes] = useState<number[]>([16, 32, 48, 64, 128, 256]);
+  const [opaqueBgColor, setOpaqueBgColor] = useState<string>('#ffffff');
+
+  // Batch mutual image converter state
+  const [batchTargetFormat, setBatchTargetFormat] = useState<ImageTargetFormat>('ico');
+  const [batchScale, setBatchScale] = useState<number>(1);
+  const [batchQuality, setBatchQuality] = useState<number>(0.92);
+  const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(new Set());
+  const [isBatchConverting, setIsBatchConverting] = useState<boolean>(false);
+  const [batchResults, setBatchResults] = useState<
+    Array<{ id: string; sourceName: string; name: string; blob: Blob; url: string; format: string }>
+  >([]);
+  const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
 
   // Pointer interaction state
   const isDrawingRef = useRef<boolean>(false);
   const startPointRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const lastPointRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // Load image into editor
-  const loadImageFile = useCallback((file: File) => {
-    setCurrentFile(file);
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const maxW = 1600;
-      const maxH = 1600;
-      let w = img.naturalWidth || 800;
-      let h = img.naturalHeight || 600;
-      if (w > maxW || h > maxH) {
-        const ratio = Math.min(maxW / w, maxH / h);
-        w = Math.round(w * ratio);
-        h = Math.round(h * ratio);
-      }
+  // Load image into editor via unified decoder (supports PPM P3/P6, ICO, BMP, PNG, JPG, WebP, SVG)
+  const loadImageFile = useCallback(
+    async (file: File) => {
+      setCurrentFile(file);
+      try {
+        const { canvas: decodedCanvas, width: origW, height: origH } = await decodeAnyImageToCanvas(
+          file,
+          file.name
+        );
+        const maxW = 1600;
+        const maxH = 1600;
+        let w = origW || 800;
+        let h = origH || 600;
+        if (w > maxW || h > maxH) {
+          const ratio = Math.min(maxW / w, maxH / h);
+          w = Math.round(w * ratio);
+          h = Math.round(h * ratio);
+        }
 
-      setCanvasSize({ width: w, height: h });
+        setCanvasSize({ width: w, height: h });
 
-      const offCanvas = document.createElement('canvas');
-      offCanvas.width = w;
-      offCanvas.height = h;
-      const ctx = offCanvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(img, 0, 0, w, h);
-        const dataUrl = offCanvas.toDataURL('image/png');
-        setHistory([dataUrl]);
-        setHistoryIndex(0);
-        setAdjustments(DEFAULT_ADJUSTMENTS);
-        setBaseImageElement(offCanvas);
+        const offCanvas = document.createElement('canvas');
+        offCanvas.width = w;
+        offCanvas.height = h;
+        const ctx = offCanvas.getContext('2d');
+        if (ctx) {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(decodedCanvas, 0, 0, w, h);
+          const dataUrl = offCanvas.toDataURL('image/png');
+          setHistory([dataUrl]);
+          setHistoryIndex(0);
+          setAdjustments(DEFAULT_ADJUSTMENTS);
+          setBaseImageElement(offCanvas);
+        }
+      } catch (err: any) {
+        console.error('Failed to decode image:', err);
+        if (onShowToast) {
+          onShowToast(
+            lang === 'ja'
+              ? `画像の読み込みに失敗しました: ${err?.message || file.name}`
+              : `Failed to decode image: ${err?.message || file.name}`
+          );
+        }
       }
-      URL.revokeObjectURL(url);
-    };
-    img.src = url;
-  }, []);
+    },
+    [lang, onShowToast]
+  );
 
   // Helper to extract an image File from a queue item (either source file or converted blob)
   const getImageFileFromItem = useCallback((item: FileItem): File | null => {
-    if (item.file && (item.file.type?.startsWith('image/') || /\.(png|jpe?g|webp|bmp|gif|svg|ico)$/i.test(item.file.name))) {
+    if (
+      item.file &&
+      (item.file.type?.startsWith('image/') || /\.(png|jpe?g|webp|bmp|gif|svg|ico|ppm)$/i.test(item.file.name))
+    ) {
       return item.file;
     }
-    if (item.resultBlob && item.resultName && /\.(png|jpe?g|webp|bmp|gif|svg|ico)$/i.test(item.resultName)) {
+    if (item.resultBlob && item.resultName && /\.(png|jpe?g|webp|bmp|gif|svg|ico|ppm)$/i.test(item.resultName)) {
       return new File([item.resultBlob], item.resultName, { type: item.type || 'image/png' });
     }
     if (item.file) {
@@ -197,20 +238,55 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
 
   const availableImageItems = useMemo(() => {
     return fileList.filter((f) => {
-      const isImgExt = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'svg', 'ico'].includes(f.format?.toLowerCase());
+      const isImgExt = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'svg', 'ico', 'ppm'].includes(
+        f.format?.toLowerCase()
+      );
       const isImgType = f.type?.startsWith('image/');
-      const isImgName = /\.(png|jpe?g|webp|bmp|gif|svg|ico)$/i.test(f.name);
-      const hasImgResult = f.resultBlob && f.resultName && /\.(png|jpe?g|webp|bmp|gif|svg|ico)$/i.test(f.resultName);
+      const isImgName = /\.(png|jpe?g|webp|bmp|gif|svg|ico|ppm)$/i.test(f.name);
+      const hasImgResult =
+        f.resultBlob && f.resultName && /\.(png|jpe?g|webp|bmp|gif|svg|ico|ppm)$/i.test(f.resultName);
       return isImgExt || isImgType || isImgName || hasImgResult;
     });
   }, [fileList]);
+
+  // Keep decoded thumbnail previews in sync for formats like PPM / multi-res ICO
+  useEffect(() => {
+    let cancelled = false;
+    availableImageItems.forEach((item) => {
+      if (item.previewUrl || thumbUrls[item.id]) return;
+      const f = getImageFileFromItem(item);
+      if (!f) return;
+      createUniversalPreviewUrl(f, item.format || item.name).then((url) => {
+        if (!cancelled) {
+          setThumbUrls((prev) => (prev[item.id] ? prev : { ...prev, [item.id]: url }));
+        }
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [availableImageItems, getImageFileFromItem, thumbUrls]);
+
+  // Pre-select all available images when batch list updates
+  useEffect(() => {
+    if (availableImageItems.length === 0) return;
+    setBatchSelectedIds((prev) => {
+      const next = new Set(prev);
+      availableImageItems.forEach((item) => {
+        if (!next.has(item.id) && prev.size === 0) {
+          next.add(item.id);
+        }
+      });
+      return next.size === prev.size ? prev : next;
+    });
+  }, [availableImageItems]);
 
   // Auto load sharedFile or first image from fileList if available
   useEffect(() => {
     if (
       sharedFile &&
       sharedFile !== loadedSharedFileRef.current &&
-      (sharedFile.type?.startsWith('image/') || /\.(png|jpe?g|webp|bmp|gif|svg|ico)$/i.test(sharedFile.name))
+      (sharedFile.type?.startsWith('image/') || /\.(png|jpe?g|webp|bmp|gif|svg|ico|ppm)$/i.test(sharedFile.name))
     ) {
       loadedSharedFileRef.current = sharedFile;
       loadImageFile(sharedFile);
@@ -787,22 +863,139 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
     }
   };
 
-  // Export & Save Image (supports PNG, JPG, WebP, BMP, ICO)
+  // Toggle ICO size entry cleanly (always keeps at least 1 size active)
+  const toggleIcoSize = (size: number) => {
+    setIcoSizes((prev) => {
+      if (prev.includes(size)) {
+        return prev.length > 1 ? prev.filter((s) => s !== size) : prev;
+      }
+      return [...prev, size].sort((a, b) => a - b);
+    });
+  };
+
+  // Batch mutual image conversion handler
+  const handleBatchConvertImages = async () => {
+    const targets = availableImageItems.filter((item) => batchSelectedIds.has(item.id));
+    if (targets.length === 0) {
+      if (onShowToast) {
+        onShowToast(lang === 'ja' ? '変換する画像を選択してください' : 'Select at least one image');
+      }
+      return;
+    }
+
+    setIsBatchConverting(true);
+    const outList: Array<{ id: string; sourceName: string; name: string; blob: Blob; url: string; format: string }> = [];
+
+    try {
+      for (const item of targets) {
+        const srcFile = getImageFileFromItem(item);
+        if (!srcFile) continue;
+
+        const blob = await convertImage(srcFile, {
+          targetFormat: batchTargetFormat,
+          quality: batchQuality,
+          scale: batchScale,
+          fillBackgroundForOpaque: batchTargetFormat === 'jpg' || batchTargetFormat === 'bmp' || batchTargetFormat === 'ppm',
+          backgroundColor: opaqueBgColor,
+          icoSizes,
+          ppmVariant,
+        });
+
+        const baseName = srcFile.name.replace(/\.[^.]+$/, '') || 'image';
+        const outExt = batchTargetFormat === 'jpeg' ? 'jpg' : batchTargetFormat;
+        const outName = `Converted_${baseName}.${outExt}`;
+        const mime =
+          outExt === 'jpg'
+            ? 'image/jpeg'
+            : outExt === 'ico'
+            ? 'image/x-icon'
+            : outExt === 'ppm'
+            ? 'image/x-portable-pixmap'
+            : `image/${outExt}`;
+        const previewUrl = await createUniversalPreviewUrl(blob, outExt);
+
+        outList.push({
+          id: `batch_${item.id}_${Date.now()}`,
+          sourceName: srcFile.name,
+          name: outName,
+          blob,
+          url: previewUrl,
+          format: outExt,
+        });
+
+        await saveProcessedFile(`imgconv_${Date.now()}_${item.id}`, srcFile.name, outName, blob, outExt);
+
+        if (onResultReady) {
+          onResultReady({
+            id: `res_conv_${Date.now()}_${item.id}`,
+            name: outName,
+            file: new File([blob], outName, { type: mime }),
+            size: blob.size,
+            type: mime,
+            format: outExt as DocumentFormat,
+            targetFormat: outExt as DocumentFormat,
+            status: 'done',
+            progress: 100,
+            resultBlob: blob,
+            resultName: outName,
+            previewUrl,
+          });
+        }
+      }
+
+      setBatchResults(outList);
+      notifyCompletion(
+        lang === 'ja' ? '画像の一括変換が完了しました' : 'Batch Image Conversion Complete',
+        `${outList.length} files`
+      );
+      if (onShowToast) {
+        onShowToast(
+          lang === 'ja'
+            ? `${outList.length} 件の画像を ${batchTargetFormat.toUpperCase()} に変換しました`
+            : `Converted ${outList.length} image(s) to ${batchTargetFormat.toUpperCase()}`
+        );
+      }
+    } catch (err: any) {
+      console.error('Batch convert error:', err);
+      if (onShowToast) {
+        onShowToast(
+          lang === 'ja' ? `変換中にエラーが発生しました: ${err?.message || ''}` : `Conversion error: ${err?.message || ''}`
+        );
+      }
+    } finally {
+      setIsBatchConverting(false);
+    }
+  };
+
+  const handleDownloadBatchZip = async () => {
+    if (batchResults.length === 0) return;
+    const zipBlob = await createZipArchive(batchResults.map((r) => ({ name: r.name, content: r.blob })));
+    const url = URL.createObjectURL(zipBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Converted_Images_${batchTargetFormat}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Export & Save Image (supports PNG, JPG, WebP, BMP, ICO, PPM, SVG)
   const handleExportImage = async () => {
     const canvas = canvasRef.current;
     if (!canvas || !currentFile) return;
 
     let exportCanvas = canvas;
-    if (exportFormat === 'jpg' || exportFormat === 'bmp') {
-      const whiteCanvas = document.createElement('canvas');
-      whiteCanvas.width = canvas.width;
-      whiteCanvas.height = canvas.height;
-      const wctx = whiteCanvas.getContext('2d');
-      if (wctx) {
-        wctx.fillStyle = '#ffffff';
-        wctx.fillRect(0, 0, whiteCanvas.width, whiteCanvas.height);
-        wctx.drawImage(canvas, 0, 0);
-        exportCanvas = whiteCanvas;
+    if (exportFormat === 'jpg' || exportFormat === 'bmp' || exportFormat === 'ppm') {
+      const opaqueCanvas = document.createElement('canvas');
+      opaqueCanvas.width = canvas.width;
+      opaqueCanvas.height = canvas.height;
+      const octx = opaqueCanvas.getContext('2d');
+      if (octx) {
+        octx.fillStyle = opaqueBgColor || '#ffffff';
+        octx.fillRect(0, 0, opaqueCanvas.width, opaqueCanvas.height);
+        octx.drawImage(canvas, 0, 0);
+        exportCanvas = opaqueCanvas;
       }
     }
 
@@ -822,6 +1015,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
       await saveProcessedFile(`imgedit_${Date.now()}`, currentFile.name, resultName, blob, exportFormat);
 
       if (onResultReady) {
+        const prevUrl = await createUniversalPreviewUrl(blob, exportFormat);
         onResultReady({
           id: `res_imgedit_${Date.now()}`,
           name: resultName,
@@ -834,6 +1028,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
           progress: 100,
           resultBlob: blob,
           resultName,
+          previewUrl: prevUrl,
         });
       }
 
@@ -852,9 +1047,20 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
       return;
     }
 
+    if (exportFormat === 'ppm') {
+      try {
+        const ppmBlob = canvasToPpmBlob(exportCanvas, ppmVariant, opaqueBgColor || '#ffffff');
+        await finishExport(ppmBlob, 'image/x-portable-pixmap');
+      } catch (e: any) {
+        console.error('PPM export failed:', e);
+        if (onShowToast) onShowToast(lang === 'ja' ? 'PPMへの変換に失敗しました' : 'Failed to export PPM');
+      }
+      return;
+    }
+
     if (exportFormat === 'ico') {
       try {
-        const icoBlob = await canvasToIcoBlob(exportCanvas, [16, 32, 48, 64, 128, 256]);
+        const icoBlob = await canvasToIcoBlob(exportCanvas, icoSizes);
         await finishExport(icoBlob, 'image/x-icon');
       } catch (e: any) {
         console.error('ICO export failed:', e);
@@ -900,6 +1106,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
     { id: 'mosaic', labelJa: 'モザイク・ぼかし', labelEn: 'Mosaic & Blur', icon: Grid },
     { id: 'markup', labelJa: 'マークアップ描画', labelEn: 'Markup & Draw', icon: PenTool },
     { id: 'text', labelJa: '文字追加', labelEn: 'Add Text', icon: Type },
+    { id: 'batch', labelJa: '一括形式変換 (ICO/PPM/BMP等)', labelEn: 'Batch Convert', icon: ArrowLeftRight },
   ];
 
   return (
@@ -932,7 +1139,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,.ico,.ppm,.bmp,image/x-icon,image/x-portable-pixmap"
         className="hidden"
         onChange={(e) => {
           if (e.target.files && e.target.files[0]) {
@@ -1037,7 +1244,334 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
         </div>
       </div>
 
-      {!currentFile ? (
+      {activeTool === 'batch' ? (
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm flex flex-col gap-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200 dark:border-slate-800">
+            <div>
+              <h4 className="font-bold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
+                <ArrowLeftRight className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                <span>
+                  {lang === 'ja'
+                    ? '画像一括・相互変換 (ICO / PPM / BMP / PNG / JPEG / WebP)'
+                    : 'Batch Image Format Converter (ICO / PPM / BMP / PNG / JPEG / WebP)'}
+                </span>
+              </h4>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                {lang === 'ja'
+                  ? '読み込んだ複数の画像を ICO・PPM（P6バイナリ / P3 ASCII）・BMP・PNG・JPEG・WebP へまとめて相互変換できます。'
+                  : 'Convert multiple loaded images at once between ICO, PPM (P6 Binary / P3 ASCII), BMP, PNG, JPEG, and WebP.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="btn-sm btn-primary flex items-center gap-1.5"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>{lang === 'ja' ? '画像を追加' : 'Add Images'}</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* Target Image Selection */}
+            <div className="lg:col-span-7 flex flex-col gap-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-slate-700 dark:text-slate-200">
+                  {lang === 'ja' ? '変換対象の画像' : 'Source Images'} ({batchSelectedIds.size}/{availableImageItems.length})
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBatchSelectedIds(new Set(availableImageItems.map((i) => i.id)))}
+                    className="text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                  >
+                    {lang === 'ja' ? 'すべて選択' : 'Select All'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBatchSelectedIds(new Set())}
+                    className="text-slate-500 hover:underline font-medium"
+                  >
+                    {lang === 'ja' ? '選択解除' : 'Clear'}
+                  </button>
+                </div>
+              </div>
+
+              {availableImageItems.length === 0 ? (
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 rounded-xl p-8 text-center cursor-pointer transition"
+                >
+                  <Upload className="w-6 h-6 text-slate-400 mx-auto mb-2" />
+                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    {lang === 'ja'
+                      ? 'クリックして変換する画像（PNG / JPG / WebP / BMP / ICO / PPM / SVG）を追加'
+                      : 'Click to add images (PNG / JPG / WebP / BMP / ICO / PPM / SVG)'}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[380px] overflow-y-auto pr-1">
+                  {availableImageItems.map((item) => {
+                    const checked = batchSelectedIds.has(item.id);
+                    const previewSrc = item.previewUrl || thumbUrls[item.id];
+                    return (
+                      <label
+                        key={item.id}
+                        className={`flex items-center gap-2.5 p-2.5 rounded-xl border cursor-pointer transition ${
+                          checked
+                            ? 'border-blue-500 bg-blue-50/70 dark:bg-blue-950/30'
+                            : 'border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/40'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            setBatchSelectedIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(item.id)) next.delete(item.id);
+                              else next.add(item.id);
+                              return next;
+                            });
+                          }}
+                          className="accent-blue-600 shrink-0"
+                        />
+                        <div className="w-11 h-11 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center overflow-hidden shrink-0">
+                          {previewSrc ? (
+                            <img src={previewSrc} alt={item.name} className="w-full h-full object-contain" />
+                          ) : (
+                            <ImageIcon className="w-5 h-5 text-slate-400" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">
+                            {item.name}
+                          </div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 uppercase tabular-nums">
+                            {item.format || 'IMG'} · {(item.size / 1024).toFixed(1)} KB
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Conversion Options */}
+            <div className="lg:col-span-5 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700 p-4 flex flex-col gap-3.5 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-200 mb-1.5">
+                  {lang === 'ja' ? '変換先の形式' : 'Target Format'}
+                </label>
+                <select
+                  value={batchTargetFormat}
+                  onChange={(e) => setBatchTargetFormat(e.target.value as ImageTargetFormat)}
+                  className="main-select text-xs py-2 w-full mb-0"
+                >
+                  <option value="ico">ICO (.ico) - マルチアイコン</option>
+                  <option value="ppm">PPM (.ppm) - Netpbm (P6 / P3)</option>
+                  <option value="bmp">BMP (.bmp) - 非圧縮ビットマップ</option>
+                  <option value="png">PNG (.png) - 可逆圧縮・透過対応</option>
+                  <option value="jpg">JPEG (.jpg) - 高圧縮写真向け</option>
+                  <option value="webp">WebP (.webp) - 軽量Web画像</option>
+                </select>
+              </div>
+
+              {batchTargetFormat === 'ppm' && (
+                <div className="flex flex-col gap-2 p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                  <span className="font-bold text-slate-700 dark:text-slate-200">
+                    {lang === 'ja' ? 'PPMエンコード形式' : 'PPM Encoding Variant'}
+                  </span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setPpmVariant('P6')}
+                      className={`py-1.5 px-2 rounded-md border font-semibold transition ${
+                        ppmVariant === 'P6'
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      P6 ({lang === 'ja' ? 'バイナリ' : 'Binary'})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPpmVariant('P3')}
+                      className={`py-1.5 px-2 rounded-md border font-semibold transition ${
+                        ppmVariant === 'P3'
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      P3 ({lang === 'ja' ? 'ASCII文字列' : 'ASCII Text'})
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {batchTargetFormat === 'ico' && (
+                <div className="flex flex-col gap-2 p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                  <span className="font-bold text-slate-700 dark:text-slate-200">
+                    {lang === 'ja' ? 'ICO格納サイズ (px)' : 'ICO Included Sizes (px)'}
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[16, 24, 32, 48, 64, 128, 256].map((sz) => {
+                      const active = icoSizes.includes(sz);
+                      return (
+                        <button
+                          key={sz}
+                          type="button"
+                          onClick={() => toggleIcoSize(sz)}
+                          className={`px-2 py-1 rounded border text-[11px] font-semibold tabular-nums transition ${
+                            active
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                          }`}
+                        >
+                          {sz}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {(batchTargetFormat === 'jpg' || batchTargetFormat === 'bmp' || batchTargetFormat === 'ppm') && (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-slate-700 dark:text-slate-200">
+                    {lang === 'ja' ? '透過領域の背景色' : 'Opaque Background'}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={opaqueBgColor}
+                      onChange={(e) => setOpaqueBgColor(e.target.value)}
+                      className="w-7 h-7 rounded cursor-pointer border border-slate-300 dark:border-slate-600 bg-transparent"
+                    />
+                    <span className="font-mono text-[11px] text-slate-500 uppercase">{opaqueBgColor}</span>
+                  </div>
+                </div>
+              )}
+
+              {(batchTargetFormat === 'jpg' || batchTargetFormat === 'webp') && (
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span className="font-bold text-slate-700 dark:text-slate-200">
+                      {lang === 'ja' ? '画質' : 'Quality'}
+                    </span>
+                    <span className="font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                      {Math.round(batchQuality * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.1}
+                    max={1}
+                    step={0.05}
+                    value={batchQuality}
+                    onChange={(e) => setBatchQuality(parseFloat(e.target.value))}
+                    className="w-full accent-blue-600"
+                  />
+                </div>
+              )}
+
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="font-bold text-slate-700 dark:text-slate-200">
+                    {lang === 'ja' ? '出力倍率' : 'Output Scale'}
+                  </span>
+                  <span className="font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                    {batchScale}x
+                  </span>
+                </div>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[0.25, 0.5, 1, 2].map((sc) => (
+                    <button
+                      key={sc}
+                      type="button"
+                      onClick={() => setBatchScale(sc)}
+                      className={`py-1 rounded border text-[11px] font-semibold tabular-nums transition ${
+                        batchScale === sc
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      {sc}x
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={isBatchConverting || batchSelectedIds.size === 0}
+                onClick={handleBatchConvertImages}
+                className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold flex items-center justify-center gap-2 transition mt-1"
+              >
+                <ArrowLeftRight className="w-4 h-4" />
+                <span>
+                  {isBatchConverting
+                    ? lang === 'ja'
+                      ? '変換処理中...'
+                      : 'Converting...'
+                    : lang === 'ja'
+                    ? `${batchSelectedIds.size} 件を ${batchTargetFormat.toUpperCase()} に変換`
+                    : `Convert ${batchSelectedIds.size} to ${batchTargetFormat.toUpperCase()}`}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {batchResults.length > 0 && (
+            <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                  {lang === 'ja' ? `変換結果 (${batchResults.length} 件)` : `Converted Files (${batchResults.length})`}
+                </span>
+                {batchResults.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={handleDownloadBatchZip}
+                    className="btn-sm btn-primary flex items-center gap-1.5"
+                  >
+                    <FolderArchive className="w-3.5 h-3.5" />
+                    <span>{lang === 'ja' ? 'すべてZIPでダウンロード' : 'Download All as ZIP'}</span>
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {batchResults.map((res) => (
+                  <div
+                    key={res.id}
+                    className="flex items-center gap-2.5 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40"
+                  >
+                    <img
+                      src={res.url}
+                      alt={res.name}
+                      className="w-10 h-10 rounded object-contain bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shrink-0"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">{res.name}</p>
+                      <p className="text-[11px] text-slate-500 tabular-nums">
+                        {res.format.toUpperCase()} · {(res.blob.size / 1024).toFixed(1)} KB
+                      </p>
+                    </div>
+                    <a
+                      href={res.url}
+                      download={res.name}
+                      className="p-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white shrink-0"
+                      title={lang === 'ja' ? '保存' : 'Download'}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : !currentFile ? (
         <div className="flex flex-col gap-4">
           {availableImageItems.length > 0 ? (
             <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm flex flex-col gap-4">
@@ -1066,7 +1600,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                 {availableImageItems.map((item) => {
                   const imgFile = getImageFileFromItem(item);
-                  const previewSrc = item.previewUrl || (imgFile ? URL.createObjectURL(imgFile) : undefined);
+                  const previewSrc = item.previewUrl || thumbUrls[item.id];
                   return (
                     <div
                       key={item.id}
@@ -1091,7 +1625,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
                         <p className="font-bold text-slate-800 dark:text-slate-200 text-xs truncate group-hover:text-blue-600">
                           {item.name}
                         </p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">
+                        <p className="text-[11px] text-slate-400 mt-0.5 tabular-nums">
                           {(item.size / 1024).toFixed(1)} KB
                         </p>
                       </div>
@@ -1123,8 +1657,8 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
               </h4>
               <p className="text-xs text-slate-500 mt-1 max-w-md">
                 {lang === 'ja'
-                  ? '切り取り（トリミング）、モザイク処理、文字入れ、矢印・枠線のマークアップ、コントラスト調整、フィルタ加工がブラウザ内で完結します。'
-                  : 'Crop, pixelate/mosaic, add text, draw markup annotations, and adjust contrast & filters entirely in your browser.'}
+                  ? 'PNG・JPEG・WebP・BMP・ICO・PPM（P3/P6）・SVGの読み込み、トリミング・モザイク・文字入れ・マークアップ・フィルタ加工・相互形式変換がブラウザ内で完結します。'
+                  : 'Open PNG, JPEG, WebP, BMP, ICO, PPM (P3/P6), or SVG to crop, pixelate, annotate, filter, and convert formats entirely in your browser.'}
               </p>
             </div>
           )}
@@ -1152,14 +1686,14 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
                 >
                   <Redo2 className="w-4 h-4" />
                 </button>
-                <span className="text-xs text-slate-500 ml-2 font-mono">
+                <span className="text-xs text-slate-500 ml-2 font-mono tabular-nums">
                   {canvasSize.width} × {canvasSize.height} px
                 </span>
               </div>
 
               {/* Canvas Background Color Mode Switcher */}
               <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs">
-                <span className="text-[10px] text-slate-500 px-1 font-medium">{lang === 'ja' ? '背景:' : 'BG:'}</span>
+                <span className="text-[10px] text-slate-500 px-1.5 font-medium">{lang === 'ja' ? '背景' : 'BG'}</span>
                 <button
                   type="button"
                   onClick={() => setCanvasBgMode('checkerboard')}
@@ -1170,7 +1704,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
                   }`}
                   title={lang === 'ja' ? '市松模様（透過背景）' : 'Checkerboard (Transparent)'}
                 >
-                  🏁
+                  {lang === 'ja' ? '透過' : 'Grid'}
                 </button>
                 <button
                   type="button"
@@ -1182,7 +1716,7 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
                   }`}
                   title={lang === 'ja' ? '白色背景' : 'White background'}
                 >
-                  ⬜
+                  {lang === 'ja' ? '白' : 'White'}
                 </button>
                 <button
                   type="button"
@@ -1194,11 +1728,11 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
                   }`}
                   title={lang === 'ja' ? '暗色背景' : 'Dark background'}
                 >
-                  ⬛
+                  {lang === 'ja' ? '黒' : 'Dark'}
                 </button>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <select
                   value={exportFormat}
                   onChange={(e) => setExportFormat(e.target.value as any)}
@@ -1209,8 +1743,35 @@ export const ImageEditorSuite: React.FC<ImageEditorSuiteProps> = ({
                   <option value="webp">WebP (.webp)</option>
                   <option value="bmp">BMP (.bmp)</option>
                   <option value="ico">ICO (.ico)</option>
+                  <option value="ppm">PPM (.ppm)</option>
                   <option value="svg">SVG (.svg)</option>
                 </select>
+
+                {exportFormat === 'ppm' && (
+                  <select
+                    value={ppmVariant}
+                    onChange={(e) => setPpmVariant(e.target.value as 'P6' | 'P3')}
+                    className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                    title={lang === 'ja' ? 'PPMエンコード形式' : 'PPM Format Variant'}
+                  >
+                    <option value="P6">P6 (Binary)</option>
+                    <option value="P3">P3 (ASCII)</option>
+                  </select>
+                )}
+
+                {(exportFormat === 'jpg' || exportFormat === 'bmp' || exportFormat === 'ppm') && (
+                  <label
+                    className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300"
+                    title={lang === 'ja' ? '透過部分の背景色' : 'Opaque background color'}
+                  >
+                    <input
+                      type="color"
+                      value={opaqueBgColor}
+                      onChange={(e) => setOpaqueBgColor(e.target.value)}
+                      className="w-6 h-6 rounded cursor-pointer border border-slate-300 dark:border-slate-600 bg-transparent"
+                    />
+                  </label>
+                )}
 
                 <button
                   onClick={handleExportImage}

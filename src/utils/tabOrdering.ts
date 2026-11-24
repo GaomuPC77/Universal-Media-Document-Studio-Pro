@@ -141,6 +141,8 @@ function getExtensionAffinity(ext: string): Record<string, number> {
     case 'bmp':
     case 'gif':
     case 'ico':
+    case 'ppm':
+    case 'pnm':
       return {
         'image-editor': 36,
         'pdf-image': 28,

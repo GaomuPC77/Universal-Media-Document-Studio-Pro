@@ -78,7 +78,7 @@ interface SvgEditorSuiteProps {
 type SvgTool = 'select' | 'nodes' | 'rect' | 'ellipse' | 'line' | 'path' | 'text';
 type SvgViewMode = 'visual' | 'split' | 'code';
 type InspectorTab = 'props' | 'layers' | 'canvas';
-type SvgExportFormat = 'svg' | 'png' | 'jpg' | 'webp';
+type SvgExportFormat = 'svg' | 'png' | 'jpg' | 'webp' | 'bmp' | 'ico' | 'ppm';
 
 interface ProjectedVertexHandle extends SvgVertexHandle {
   leftPct: number;
@@ -854,7 +854,18 @@ export const SvgEditorSuite: React.FC<SvgEditorSuiteProps> = ({
           bgMode === 'dark' ? 'dark' : bgMode === 'white' ? 'white' : 'transparent'
         );
         blob = res.blob;
-        mime = exportFormat === 'jpg' ? 'image/jpeg' : exportFormat === 'webp' ? 'image/webp' : 'image/png';
+        mime =
+          exportFormat === 'jpg'
+            ? 'image/jpeg'
+            : exportFormat === 'webp'
+            ? 'image/webp'
+            : exportFormat === 'bmp'
+            ? 'image/bmp'
+            : exportFormat === 'ico'
+            ? 'image/x-icon'
+            : exportFormat === 'ppm'
+            ? 'image/x-portable-pixmap'
+            : 'image/png';
         outName = `Edited_${baseName}.${exportFormat}`;
       }
 
@@ -1156,6 +1167,9 @@ export const SvgEditorSuite: React.FC<SvgEditorSuiteProps> = ({
             <option value="png">PNG (.png)</option>
             <option value="jpg">JPEG (.jpg)</option>
             <option value="webp">WebP (.webp)</option>
+            <option value="bmp">BMP (.bmp)</option>
+            <option value="ico">ICO (.ico)</option>
+            <option value="ppm">PPM (.ppm)</option>
           </select>
 
           {exportFormat !== 'svg' && (
